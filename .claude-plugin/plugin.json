@@ -1,0 +1,7 @@
+{
+  "name": "voice",
+  "version": "0.1.0",
+  "description": "Hands-free voice conversation: talk to Claude, hear the prose, see diagrams and tables on screen",
+  "author": { "name": "yash-srivastava19" },
+  "types": "./types/index.d.ts"
+}
