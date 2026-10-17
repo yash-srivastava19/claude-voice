@@ -14,7 +14,7 @@ const COMMAND = 'talk'
 // hearing, thinking and speaking read apart at a glance.
 const PHASE_LOOK: Record<VoicePhase, { glyph: string; color?: string; hint: string }> = {
   off: { glyph: '○', hint: '' },
-  starting: { glyph: '…', color: 'gray', hint: 'loading the voice models' },
+  starting: { glyph: '…', color: 'gray', hint: 'loading the voice models (first run downloads them)' },
   listening: { glyph: '●', color: 'green', hint: 'say something · "stop" interrupts' },
   hearing: { glyph: '◉', color: 'greenBright', hint: 'hearing you…' },
   thinking: { glyph: '◐', color: 'yellow', hint: 'working on it · speak to add to this turn' },
@@ -78,6 +78,16 @@ async function call($: EngineInterface, method: 'GET' | 'POST', path: string, bo
   })
   if (!res.ok) throw new Error(`voice daemon ${path}: HTTP ${res.status}`)
   return JSON.parse(res.text || '{}')
+}
+
+// First /talk start: install the Python environment and models (install.sh is
+// idempotent and leaves a marker when done).
+async function ensureInstalled($: EngineInterface) {
+  const check = await $.process.run(['sh', '-c', '[ -f "${VOICE_HOME:-$HOME/.local/share/voice-mode}/.installed" ]'])
+  if (check.exitCode === 0) return
+  $.ui.toast('Voice: first run, downloading models (about 500 MB). This takes a few minutes.', { timeoutMs: 20_000 })
+  const { exitCode, stderr } = await $.process.run(['sh', `${$.plugin.root}/install.sh`], { timeoutMs: 600_000 })
+  if (exitCode !== 0) throw new Error(stderr.trim().split('\n').pop() || 'install failed; run install.sh in the plugin folder')
 }
 
 async function startDaemon($: EngineInterface) {
@@ -244,6 +254,7 @@ async function poll($: EngineInterface) {
 
 async function start($: EngineInterface) {
   await update($, phase, () => 'starting')
+  await ensureInstalled($)
   await startDaemon($)
   await update($, isActive, () => true)
   await update($, phase, () => (v.runningTurn ? 'thinking' : 'listening'))

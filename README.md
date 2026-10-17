@@ -5,26 +5,28 @@ Runs fully local (whisper.cpp + Kokoro). No API keys.
 
 ## Install
 
-Needs Claude Code 2.1.286+, macOS or Linux.
+Needs Claude Code 2.1.286+, macOS or Linux. On macOS, `brew install sox` first.
 
-```sh
-git clone https://github.com/yash-srivastava19/claude-voice
-cd claude-voice
-./install.sh
-```
+1. Turn on plugin hooks (early access) in `~/.claude/settings.json`:
 
-Downloads ~500 MB of models once. On macOS, `brew install sox` first.
+   ```json
+   "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1" }
+   ```
 
-## Run
+2. In Claude Code:
 
-```sh
-CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir /path/to/claude-voice
-```
+   ```
+   /plugin marketplace add yash-srivastava19/claude-voice
+   /plugin install voice@claude-voice
+   ```
 
-Then type `/talk start`. Use headphones. `/talk stop` to end.
+3. Restart Claude Code and type `/talk start`. The first start downloads the
+   models (~500 MB, a few minutes).
 
+## Use
+
+- Just talk. Use headphones.
 - Talk over Claude to interrupt; say "stop" to cancel.
 - After 2 minutes of quiet it sleeps; say "hey Claude" to wake it.
+- `/talk stop` to end.
 - Log: `~/.local/share/voice-mode/voiced.log`
-
-The plugin hooks API is early access and may change between Claude Code releases.

@@ -1,0 +1,16 @@
+{
+  "name": "claude-voice",
+  "owner": {
+    "name": "yash-srivastava19"
+  },
+  "metadata": {
+    "description": "Hands-free voice mode for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "voice",
+      "source": "./",
+      "description": "Talk to Claude Code out loud. Local speech in and out."
+    }
+  ]
+}
