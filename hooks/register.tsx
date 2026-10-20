@@ -28,6 +28,13 @@ const KEEP_AWAKE_MS = 20_000
 // still being transcribed hold the prompt open on their own (see openSegments).
 const SUBMIT_DEBOUNCE_MS = 400
 const STOP_WORDS = /^(stop|wait|hold on|cancel|never mind|shut up)[.!]?$/i
+const VOICES_DIR = '~/.local/share/voice-mode/voices'
+const HELP = `/talk start, /talk stop     turn voice mode on or off
+/talk voices                list the voices
+/talk voice <name>          switch voice: a name from the list, a mix such as
+                            af_heart:0.6+bf_emma:0.4, or one of your own
+/talk speed <0.5 to 2.0>    speaking rate (1 is normal)
+/talk settings              show the current voice and speed`
 
 const VOICE_CONTEXT = `Voice mode is on. The person is talking to you out loud through speech recognition, and every prose sentence you write is read aloud to them by a text-to-speech voice. Fenced code blocks, tables, headings and diagrams are shown on screen and are not read.
 
@@ -67,6 +74,9 @@ const v = {
   hasSpokenThisTurn: false,
   // The daemon sleeps after a quiet spell; a running turn keeps it awake.
   lastKeepAwake: 0,
+  // The plugin's settings (userConfig), from `register`'s options; /talk voice and
+  // /talk speed change them through /config, which reloads the module with the new ones.
+  settings: { voice: 'michael', speed: 1.05 },
 }
 
 async function call($: EngineInterface, method: 'GET' | 'POST', path: string, body?: object) {
@@ -76,28 +86,39 @@ async function call($: EngineInterface, method: 'GET' | 'POST', path: string, bo
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   })
-  if (!res.ok) throw new Error(`voice daemon ${path}: HTTP ${res.status}`)
+  if (!res.ok) {
+    const why = (() => { try { return JSON.parse(res.text).error } catch { return undefined } })()
+    throw new Error(why ?? `voice daemon ${path}: HTTP ${res.status}`)
+  }
   return JSON.parse(res.text || '{}')
 }
 
 // First /talk start: install the Python environment and models (install.sh is
 // idempotent and leaves a marker when done).
 async function ensureInstalled($: EngineInterface) {
-  const check = await $.process.run(['sh', '-c', '[ -f "${VOICE_HOME:-$HOME/.local/share/voice-mode}/.installed" ]'])
+  const check = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--check'])
   if (check.exitCode === 0) return
-  $.ui.toast('Voice: first run, downloading models (about 500 MB). This takes a few minutes.', { timeoutMs: 20_000 })
+  $.ui.toast('Voice: setting up (first run or after an update; the first run downloads about 500 MB).', { timeoutMs: 20_000 })
   const { exitCode, stderr } = await $.process.run(['sh', `${$.plugin.root}/install.sh`], { timeoutMs: 600_000 })
   if (exitCode !== 0) throw new Error(stderr.trim().split('\n').pop() || 'install failed; run install.sh in the plugin folder')
 }
 
-async function startDaemon($: EngineInterface) {
-  const script = `${$.plugin.root}/helper/voiced.py`
-  const { exitCode, stdout, stderr } = await $.process.run(
-    ['sh', '-c', '"${VOICE_PYTHON:-$HOME/.local/share/voice-mode/venv/bin/python}" "$1" --start', 'sh', script],
-    { timeoutMs: 30_000 },
+// Runs the daemon script with the voice environment's Python.
+function daemonScript($: EngineInterface, args: string[], timeoutMs = 30_000) {
+  return $.process.run(
+    ['sh', '-c', '"${VOICE_PYTHON:-$HOME/.local/share/voice-mode/venv/bin/python}" "$@"', 'sh',
+      `${$.plugin.root}/helper/voiced.py`, ...args],
+    { timeoutMs },
   )
+}
+
+async function startDaemon($: EngineInterface) {
+  // --start also replaces a daemon left running by an older version of the plugin.
+  const { exitCode, stdout, stderr } = await daemonScript($, ['--start'])
   if (exitCode !== 0) throw new Error(stderr.trim() || `voice daemon exited ${exitCode}`)
   v.socket = JSON.parse(stdout.trim().split('\n').pop() ?? '{}').socket
+  await call($, 'POST', '/config', v.settings).catch(err =>
+    $.ui.toast(`voice: ${(err as Error).message}; keeping the previous voice`))
 }
 
 // One timeline: the mod's lines go into the daemon's log, on the daemon's clock.
@@ -275,7 +296,73 @@ async function stop($: EngineInterface) {
   if (v.socket) await call($, 'POST', '/shutdown').catch(() => {})
 }
 
-export const register: Register = on => {
+// Saves one of the plugin's settings the way the /config menu would.
+async function saveSetting($: EngineInterface, field: 'voice' | 'speed', value: string | number) {
+  const row = (await $.config.list()).find(r => /^voice(@[^.]*)?\./.test(r.key) && r.key.endsWith(`.${field}`))
+  if (!row) return 'saved for this session only (no /config row found)'
+  const { deny } = await $.config.set({ key: row.key, value })
+  return deny ? `not saved: ${deny}` : undefined
+}
+
+async function listVoices($: EngineInterface) {
+  const { exitCode, stdout, stderr } = await daemonScript($, ['--voices'])
+  if (exitCode !== 0) return `Could not list voices: ${stderr.trim()}`
+  const all = JSON.parse(stdout) as {
+    presets: { name: string; about: string }[]
+    kokoro: string[]
+    yours: { name: string }[]
+  }
+  const width = Math.max(...all.presets.map(p => p.name.length)) + 2
+  return [
+    `Current: ${v.settings.voice} at speed ${v.settings.speed}. Switch with /talk voice <name>.`,
+    '',
+    ...all.presets.map(p => `  ${p.name.padEnd(width)}${p.about}`),
+    '',
+    `All Kokoro voices (a = US, b = British; f/m): ${all.kokoro.join(', ')}`,
+    'Mix them with shares: /talk voice af_heart:0.6+bf_emma:0.4',
+    '',
+    all.yours.length
+      ? `Yours: ${all.yours.map(y => y.name).join(', ')}`
+      : `Yours: none yet. Put a voice file in ${VOICES_DIR} (see the README).`,
+  ].join('\n')
+}
+
+// Cuts off whatever is playing, then speaks a sample. The flush is awaited: sent
+// unawaited, it could reach the daemon after the sample and drop it.
+async function preview($: EngineInterface, why: string, text: string) {
+  v.gen += 1
+  await call($, 'POST', '/flush', { gen: v.gen, why })
+  say($, text)
+}
+
+async function setVoice($: EngineInterface, name: string) {
+  const check = await daemonScript($, ['--check-voice', name])
+  if (check.exitCode !== 0) return check.stderr.trim() || `No voice named ${name}.`
+  v.settings = { ...v.settings, voice: name }
+  if (await read($, isActive)) {
+    await call($, 'POST', '/config', { voice: name })
+    await preview($, 'voice change', `Hi, this is ${name}. This is how I sound.`)
+  }
+  const note = await saveSetting($, 'voice', name)
+  return `Voice: ${name}${note ? ` (${note})` : ''}.`
+}
+
+async function setSpeed($: EngineInterface, arg: string) {
+  const speed = Number(arg)
+  if (!arg || !Number.isFinite(speed) || speed < 0.5 || speed > 2) return 'Speed is a number from 0.5 to 2.0, such as /talk speed 1.1.'
+  v.settings = { ...v.settings, speed }
+  if (await read($, isActive)) {
+    await call($, 'POST', '/config', { speed })
+    await preview($, 'speed change', 'This is how fast I talk now.')
+  }
+  const note = await saveSetting($, 'speed', speed)
+  return `Speed: ${speed}${note ? ` (${note})` : ''}.`
+}
+
+export const register: Register = (on, options) => {
+  if (typeof options.voice === 'string' && options.voice.trim()) v.settings.voice = options.voice.trim()
+  if (typeof options.speed === 'number') v.settings.speed = options.speed
+
   on('session.start', async ($, e, next) => {
     // Resume first: a reload must never leave voice on with nothing polling.
     if (await read($, isActive)) {
@@ -289,8 +376,8 @@ export const register: Register = on => {
     await $.command
       .register({
         name: COMMAND,
-        description: 'Talk to Claude hands-free: /talk start, /talk stop',
-        argumentHint: '[start|stop]',
+        description: 'Talk to Claude hands-free: /talk start, /talk stop, /talk voices',
+        argumentHint: '[start|stop|voices|voice <name>|speed <n>|settings]',
         immediate: true,
       })
       .catch(err => $.ui.toast(`voice: could not register /${COMMAND}: ${(err as Error).message}`))
@@ -303,7 +390,18 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
-    const arg = e.args.trim().toLowerCase()
+    const [sub = '', ...rest] = e.args.trim().split(/\s+/)
+    const arg = sub.toLowerCase()
+    const value = rest.join(' ')
+    try {
+      if (arg === 'voices') return { text: await listVoices($) }
+      if (arg === 'voice') return { text: value ? await setVoice($, value) : `Voice: ${v.settings.voice}. /talk voices lists the others.` }
+      if (arg === 'speed') return { text: value ? await setSpeed($, value) : `Speed: ${v.settings.speed}.` }
+      if (arg === 'settings') return { text: `Voice: ${v.settings.voice}\nSpeed: ${v.settings.speed}\nYour voices folder: ${VOICES_DIR}` }
+    } catch (err) {
+      return { text: `voice: ${(err as Error).message}` }
+    }
+    if (!['', 'start', 'on', 'stop', 'off'].includes(arg)) return { text: HELP }
     const isOn = await read($, isActive)
     const want = arg === 'start' || arg === 'on' ? true : arg === 'stop' || arg === 'off' ? false : !isOn
 
@@ -323,7 +421,11 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     if (!(await read($, isActive))) return next(e)
-    hush($, 'new prompt') // a new prompt, typed or spoken, ends any reply still being read
+    // A prompt from the person, typed or spoken, ends any reply still being read. One
+    // that only arrives (a background task finishing, a scheduled check-in) waits its
+    // turn: its answer is spoken after the current reply.
+    const o = e.origin
+    if (o.kind === 'composer' || o.kind === 'bridge' || (o.kind === 'plugin' && o.asUser)) hush($, 'new prompt')
     if (e.origin.kind === 'composer') void call($, 'POST', '/wake', { why: 'typed prompt' }).catch(() => {})
     return next({ ...e, context: [...(e.context ?? []), VOICE_CONTEXT] })
   })

@@ -7,7 +7,11 @@ and speaks text with Kokoro. The mod talks to it over HTTP on a Unix socket:
   POST /say  {text,gen} queue a sentence; dropped if gen is older than current
   POST /flush {gen}     stop speaking, drop queued sentences older than gen
   POST /listen {on}     pause or resume the mic
+  POST /config {voice,speed}  change the voice or speaking rate (HTTP 400 if unknown)
   POST /shutdown        exit
+
+`voiced.py --voices` prints the voices as JSON; `voiced.py --check-voice NAME`
+exits 0 if NAME is a voice. Neither loads a model.
 
 `voiced.py --start` starts the daemon if no live one owns the socket, then exits.
 The daemon exits on its own when nothing polls /events for WATCHDOG_S seconds,
@@ -33,13 +37,35 @@ LOG = Path(os.environ.get("VOICE_LOG") or HOME / "voiced.log")  # tests point th
 
 WHISPER_MODEL = os.environ.get("VOICE_WHISPER_MODEL", str(MODELS / "ggml-base.en.bin"))
 IS_MAC = sys.platform == "darwin"
+# Bumped with each release: `--start` replaces a running daemon of another version.
+VERSION = "0.2.0"
 KOKORO_MODEL = os.environ.get("VOICE_KOKORO_MODEL", str(MODELS / "kokoro-v1.0.onnx"))
-# The voice is read from a file so it can change without restarting Claude Code.
-VOICE_FILE = HOME / "voice"
-KOKORO_VOICE = os.environ.get("VOICE_KOKORO_VOICE") or (
-    VOICE_FILE.read_text().strip() if VOICE_FILE.exists() else "am_michael"
-)
+KOKORO_VOICES = MODELS / "voices-v1.0.bin"
+# The mod sends the voice and speed it is configured with (POST /config); these
+# are the starting values until it does.
+KOKORO_VOICE = os.environ.get("VOICE_KOKORO_VOICE", "michael")
 KOKORO_SPEED = float(os.environ.get("VOICE_KOKORO_SPEED", "1.05"))
+# Your own voices: <name>.npy or <name>.pt (a Kokoro voice) or an executable
+# <name>.sh (any TTS: text on stdin, a WAV on stdout).
+USER_VOICES = HOME / "voices"
+
+# Picked from Kokoro's best-rated English voices. A "+" joins voices into a mix,
+# each weighted by its ":<share>".
+PRESETS = {
+    "heart": ("af_heart", "warm, US female"),
+    "bella": ("af_bella", "bright and expressive, US female"),
+    "nicole": ("af_nicole", "soft, close to the mic, US female"),
+    "emma": ("bf_emma", "calm, British female"),
+    "michael": ("am_michael", "steady, US male"),
+    "fenrir": ("am_fenrir", "deep, US male"),
+    "puck": ("am_puck", "lively, US male"),
+    "george": ("bm_george", "warm, British male"),
+    "fable": ("bm_fable", "storyteller, British male"),
+    "honey": ("af_heart:0.6+af_bella:0.4", "mix of heart and bella"),
+    "velvet": ("af_nicole:0.5+af_heart:0.5", "mix of nicole and heart"),
+}
+# Kokoro's prefix: language, then f/m. Only English is wired to the transcriber.
+LANGS = {"a": "en-us", "b": "en-gb"}
 # A PipeWire source name to record from instead of the default mic, such as the laptop mic
 # while Bluetooth headphones stay in their high-quality (A2DP) profile.
 MIC_SOURCE = os.environ.get("VOICE_MIC_SOURCE", "")
@@ -186,19 +212,131 @@ def clean_transcript(text: str) -> str:
     return text
 
 
+def kokoro_ids():
+    import numpy as np
+    with np.load(KOKORO_VOICES) as z:
+        return sorted(k for k in z.files if k[:1] in LANGS)
+
+
+def user_voices():
+    if not USER_VOICES.is_dir():
+        return {}
+    found = {}
+    for f in sorted(USER_VOICES.iterdir()):
+        if f.suffix in (".npy", ".pt") or (f.suffix == ".sh" and os.access(f, os.X_OK)):
+            found.setdefault(f.stem, f)
+    return found
+
+
+def list_voices():
+    return {
+        "presets": [{"name": n, "voice": v, "about": a} for n, (v, a) in PRESETS.items()],
+        "kokoro": kokoro_ids(),
+        "yours": [{"name": n, "file": str(f)} for n, f in user_voices().items()],
+    }
+
+
+class Voice:
+    """A resolved voice: a Kokoro style (a built-in, a mix or a file) or a command."""
+
+    def __init__(self, name, style=None, lang="en-us", command=None):
+        self.name, self.style, self.lang, self.command = name, style, lang, command
+
+
+def resolve_voice(name, np, styles=None):
+    """Turns a voice name into a Voice; raises ValueError naming what is wrong.
+
+    Accepts a preset ("heart"), a Kokoro id ("af_heart"), a mix
+    ("af_heart:0.6+bf_emma:0.4") or one of your voices in USER_VOICES.
+    """
+    name = name.strip()
+    spec = PRESETS.get(name.lower(), (name, ""))[0]
+    mine = user_voices().get(name)
+    if mine is not None:
+        if mine.suffix == ".sh":
+            return Voice(name, command=str(mine))
+        style = np.load(mine) if mine.suffix == ".npy" else load_pt(mine)
+        style = np.asarray(style, dtype=np.float32).reshape(-1, 1, 256)
+        return Voice(name, style=style)
+    if styles is None:
+        styles = np.load(KOKORO_VOICES)
+    parts, total, mix = [], 0.0, None
+    for part in spec.split("+"):
+        vid, _, share = part.strip().partition(":")
+        if vid not in styles.files or vid[:1] not in LANGS:
+            raise ValueError(f"no voice named {vid!r}; /talk voices lists them")
+        try:
+            weight = float(share) if share else 1.0
+        except ValueError:
+            raise ValueError(f"bad share {share!r} in {part!r}; write it like af_heart:0.6") from None
+        parts.append(vid)
+        total += weight
+        mix = styles[vid] * weight if mix is None else mix + styles[vid] * weight
+    if total <= 0:
+        raise ValueError("the shares in a mix must add up to more than 0")
+    return Voice(name, style=(mix / total).astype(np.float32), lang=LANGS[parts[0][0]])
+
+
+def load_pt(path):
+    try:
+        import torch
+    except ImportError:
+        raise ValueError(f"{path.name} is a PyTorch file; convert it once to .npy (see the README)") from None
+    return torch.load(path, map_location="cpu").numpy()
+
+
 class KokoroTTS:
     def __init__(self, np):
         from kokoro_onnx import Kokoro
         self.np = np
-        self.model = Kokoro(KOKORO_MODEL, str(MODELS / "voices-v1.0.bin"))
-        self.voice = KOKORO_VOICE
+        self.model = Kokoro(KOKORO_MODEL, str(KOKORO_VOICES))
+        self.styles = np.load(KOKORO_VOICES)
+        self.speed = KOKORO_SPEED
+        try:
+            self.voice = resolve_voice(KOKORO_VOICE, np, self.styles)
+        except ValueError as err:
+            log(f"voice {KOKORO_VOICE!r}: {err}; using michael")
+            self.voice = resolve_voice("michael", np, self.styles)
         # Warm up on a full sentence: the first real call is otherwise about twice as slow.
         for _ in range(2):
-            self.model.create("Sure, so here is how the whole thing fits together.", voice=self.voice, lang="en-us")
+            self.model.create("Sure, so here is how the whole thing fits together.",
+                              voice=self.styles["am_michael"], lang="en-us")
 
-    def synthesize(self, text, voice=None):
-        audio, rate = self.model.create(text, voice=voice or self.voice, speed=KOKORO_SPEED, lang="en-us")
+    def configure(self, voice=None, speed=None):
+        """Applies a new voice and/or speed; raises ValueError if either is bad."""
+        if speed is not None:
+            speed = float(speed)
+            if not 0.5 <= speed <= 2.0:
+                raise ValueError("speed must be between 0.5 and 2.0")
+        if voice is not None and voice != self.voice.name:
+            self.voice = resolve_voice(voice, self.np, self.styles)
+            log(f"voice: {self.voice.name}")
+        if speed is not None:
+            self.speed = speed
+
+    def synthesize(self, text):
+        v = self.voice
+        if v.command:
+            return self.run_command(v.command, text)
+        audio, rate = self.model.create(text, voice=v.style, speed=self.speed, lang=v.lang)
         return rate, (self.np.clip(audio, -1, 1) * 32767).astype(self.np.int16).tobytes()
+
+    def run_command(self, command, text):
+        import io
+        import wave
+        res = subprocess.run([command], input=text.encode(), capture_output=True, timeout=60,
+                             env={**os.environ, "VOICE_SPEED": str(self.speed)})
+        if res.returncode != 0:
+            raise RuntimeError(f"{command} exited {res.returncode}: {res.stderr.decode()[-200:]}")
+        with wave.open(io.BytesIO(res.stdout)) as w:
+            rate, channels, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+            frames = w.readframes(w.getnframes())
+        if width != 2:
+            raise RuntimeError(f"{command}: write 16-bit WAV (got {8 * width}-bit)")
+        pcm = self.np.frombuffer(frames, dtype=self.np.int16)
+        if channels > 1:
+            pcm = pcm.reshape(-1, channels).mean(axis=1).astype(self.np.int16)
+        return rate, pcm.tobytes()
 
 
 # In power-saver mode Kokoro runs slower than real time and every sentence ends in a
@@ -316,7 +454,7 @@ class Daemon:
         opts.intra_op_num_threads = 1
         self.vad = ort.InferenceSession(str(MODELS / "silero_vad.onnx"), sess_options=opts)
         self.tts = KokoroTTS(np)
-        log("tts:", f"kokoro ({KOKORO_VOICE})")
+        log("tts:", f"kokoro ({self.tts.voice.name}, speed {self.tts.speed})")
         from pywhispercpp.model import Model
 
         def whisper(path, threads):
@@ -376,7 +514,7 @@ class Daemon:
     # the previous one, so a slow voice model costs latency on the first
     # sentence only.
 
-    def say(self, text, gen, voice=None):
+    def say(self, text, gen):
         if gen < self.gen:
             log(f"say dropped: gen {gen} < {self.gen}")
             return
@@ -388,7 +526,7 @@ class Daemon:
         for chunk in chunks:
             with self.busy_lock:
                 self.busy += 1
-            self.say_q.put((gen, chunk, voice))
+            self.say_q.put((gen, chunk))
 
     def done_one(self):
         with self.busy_lock:
@@ -416,7 +554,7 @@ class Daemon:
     def synth_loop(self):
         while not self.stopping.is_set():
             try:
-                gen, text, voice = self.say_q.get(timeout=0.2)
+                gen, text = self.say_q.get(timeout=0.2)
             except queue.Empty:
                 continue
             if gen < self.gen:
@@ -424,7 +562,7 @@ class Daemon:
                 continue
             try:
                 t = time.monotonic()
-                rate, pcm = self.tts.synthesize(text, voice)
+                rate, pcm = self.tts.synthesize(text)
                 if rate:
                     log(f"tts {time.monotonic() - t:.2f}s for {len(pcm) / 2 / rate:.1f}s audio")
             except Exception as err:  # keep the loop alive on a bad sentence
@@ -663,9 +801,9 @@ def make_handler(d: Daemon, server_ref):
         def log_message(self, *args):
             pass
 
-        def reply(self, body):
+        def reply(self, body, status=200):
             data = json.dumps(body).encode()
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -679,7 +817,9 @@ def make_handler(d: Daemon, server_ref):
                 self.reply({"events": d.drain(), "speaking": d.speaking,
                             "listening": d.listening, "gen": d.gen, "awake": d.awake})
             elif self.path == "/health":
-                self.reply({"ok": True, "pid": os.getpid()})
+                self.reply({"ok": True, "pid": os.getpid(), "version": VERSION})
+            elif self.path == "/config":
+                self.reply({"voice": d.tts.voice.name, "speed": d.tts.speed})
             else:
                 self.send_error(404)
 
@@ -687,7 +827,13 @@ def make_handler(d: Daemon, server_ref):
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
             if self.path == "/say":
-                d.say(str(body.get("text", "")), int(body.get("gen", 0)), body.get("voice"))
+                d.say(str(body.get("text", "")), int(body.get("gen", 0)))
+            elif self.path == "/config":
+                try:
+                    d.tts.configure(body.get("voice"), body.get("speed"))
+                except (ValueError, OSError) as err:
+                    self.reply({"error": str(err)}, 400)
+                    return
             elif self.path == "/flush":
                 d.flush(int(body.get("gen", d.gen + 1)), str(body.get("why", "mod")))
             elif self.path == "/wake":
@@ -708,21 +854,44 @@ def make_handler(d: Daemon, server_ref):
     return Handler
 
 
-def alive() -> bool:
+def request(method, path) -> bytes:
+    with socket.socket(socket.AF_UNIX) as s:
+        s.settimeout(1)
+        s.connect(str(SOCK))
+        s.sendall(f"{method} {path} HTTP/1.0\r\nContent-Length: 0\r\n\r\n".encode())
+        return s.recv(4096)
+
+
+def running_version():
+    """The live daemon's version ("" for one too old to say), or None if none is live."""
     try:
-        with socket.socket(socket.AF_UNIX) as s:
-            s.settimeout(1)
-            s.connect(str(SOCK))
-            s.sendall(b"GET /health HTTP/1.0\r\n\r\n")
-            return b'"ok": true' in s.recv(4096)
+        reply = request("GET", "/health")
     except OSError:
-        return False
+        return None
+    if b'"ok": true' not in reply:
+        return None
+    m = re.search(rb'"version": "([^"]*)"', reply)
+    return m.group(1).decode() if m else ""
+
+
+def alive() -> bool:
+    return running_version() is not None
 
 
 def start_detached() -> int:
-    if alive():
+    version = running_version()
+    if version == VERSION:
         print(json.dumps({"status": "running", "socket": str(SOCK)}))
         return 0
+    if version is not None:  # an older daemon from before an update: replace it
+        try:
+            request("POST", "/shutdown")
+        except OSError:
+            pass
+        for _ in range(50):
+            time.sleep(0.1)
+            if not alive():
+                break
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(LOG, "ab") as logf:
         subprocess.Popen(
@@ -741,6 +910,17 @@ def start_detached() -> int:
 def main():
     if "--start" in sys.argv:
         sys.exit(start_detached())
+    if "--voices" in sys.argv:
+        print(json.dumps(list_voices()))
+        sys.exit(0)
+    if "--check-voice" in sys.argv:
+        import numpy as np
+        try:
+            resolve_voice(sys.argv[sys.argv.index("--check-voice") + 1], np)
+        except (ValueError, OSError, IndexError) as err:
+            print(err, file=sys.stderr)
+            sys.exit(1)
+        sys.exit(0)
     if alive():
         log("another daemon owns", SOCK)
         sys.exit(0)

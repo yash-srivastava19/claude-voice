@@ -5,6 +5,10 @@
 set -eu
 
 V="${VOICE_HOME:-$HOME/.local/share/voice-mode}"
+# Bump when a release needs new packages or models; an older install then reruns
+# this on the next /talk start (finished downloads are skipped).
+SETUP=2
+if [ "${1:-}" = "--check" ]; then [ "$(cat "$V/.installed" 2>/dev/null)" = "$SETUP" ]; exit; fi
 die() { echo "voice: $*" >&2; exit 1; }
 
 # Audio tools: sox on macOS, ALSA's arecord/aplay on Linux.
@@ -40,5 +44,6 @@ get ggml-base.en.bin  "$W/ggml-base.en.bin"
 get ggml-tiny.en.bin  "$W/ggml-tiny.en.bin"
 get silero_vad.onnx   https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx
 
-touch "$V/.installed"
+mkdir -p "$V/voices"
+echo "$SETUP" > "$V/.installed"
 echo "Voice is installed."
