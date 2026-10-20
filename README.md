@@ -41,7 +41,8 @@ first (`brew install python@3.13`, or your distro's package) saves a 70 MB downl
 ## Use
 
 - Just talk.
-- Say "stop" to cancel a reply.
+- To cut a reply short: say "stop" (on speakers, only once the mic is listening; see
+  below), press **Hush** in the voice band, or run `/talk hush`.
 - After 2 minutes of quiet it sleeps; say "hey Claude" to wake it.
 - `/talk stop` to end.
 
@@ -53,7 +54,7 @@ what your machine can do; `/talk start` says which one you got.
 | Mode | When | Talk over Claude? |
 |---|---|---|
 | `aec` | Linux with the echo-cancel config below | yes: Claude's voice is subtracted from the mic |
-| `gate` | everything else, including macOS speakers | no: the mic pauses while Claude speaks; type anything to interrupt |
+| `gate` | everything else, including macOS speakers | no: the mic pauses while Claude speaks; press Hush, run `/talk hush`, or send a message |
 | `open` | you set it, for headphones | yes: nothing is held back |
 
 With headphones, put `"VOICE_ECHO": "open"` in the `env` block of
@@ -74,9 +75,9 @@ The next `/talk start` uses it. Delete the file and restart PipeWire to undo.
 ## Troubleshooting
 
 - **Setup failed.** The message shows the step and the error. The full output is in
-  `~/.local/share/voice-mode/install.log`. Rerun with
-  `sh ~/.claude/plugins/cache/claude-voice/voice/*/install.sh`; finished steps are
-  skipped.
+  `~/.local/share/voice-mode/install.log`. To retry, run the `install.sh` command the
+  error message prints (it names the installed version's folder); finished steps are
+  skipped and downloads resume.
 - **It answers itself, or drops what you said.** Check the mode on the `audio:` line
   of the log. `open` on speakers causes this; unset `VOICE_ECHO`.
 - **Daemon log:** `~/.local/share/voice-mode/voiced.log`, one line per thing heard,

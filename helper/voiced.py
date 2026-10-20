@@ -149,6 +149,7 @@ ECHO_MODES = ("aec", "gate", "open")
 ECHO_MODE = os.environ.get("VOICE_ECHO", "").strip().lower()
 # Speakers keep sounding a little after the last block is written, and a room echoes.
 ECHO_TAIL_S = float(os.environ.get("VOICE_ECHO_TAIL_S", "0.5"))
+TAIL_FRAMES = int(ECHO_TAIL_S / FRAME_S) + 1
 ECHO_MATCH = 0.6  # share of heard words that sit in runs of what was playing
 # Short interruptions that always get through, even when Claude just said the same word.
 STOP_PHRASES = {"stop", "wait", "hold on", "cancel", "never mind", "shut up"}
@@ -723,14 +724,17 @@ class Daemon:
 
             # No echo cancellation: while Claude speaks the mic hears mostly Claude, so
             # it is not listened to. Speech already under way is kept and sent on.
-            if self.echo == "gate" and (self.speaking
-                                        or time.monotonic() < self.player.sound_end() + ECHO_TAIL_S):
+            # The tail after playback is still recorded, though, so a reply that starts
+            # the moment Claude stops keeps its first word once the gate opens.
+            tail_end = self.player.sound_end() + ECHO_TAIL_S
+            if self.echo == "gate" and (self.speaking or time.monotonic() < tail_end):
                 if in_speech and self.awake:
                     audio = b"".join(voiced)
                     log(f"utterance cut short by playback after {len(audio) / 2 / RATE:.1f}s")
                     threading.Thread(target=self.transcribe, daemon=True,
                                      args=(audio, False, started, time.monotonic())).start()
-                in_speech, voiced, preroll, hot = False, [], [], 0
+                in_speech, voiced, hot = False, [], 0
+                preroll = [] if self.speaking else (preroll + [raw])[-(PREROLL_FRAMES + TAIL_FRAMES):]
                 continue
 
             threshold = BARGE_THRESHOLD if self.speaking else THRESHOLD
@@ -738,7 +742,9 @@ class Daemon:
             hot = hot + 1 if prob >= threshold else 0
 
             if not in_speech:
-                preroll = (preroll + [raw])[-PREROLL_FRAMES:]
+                # Just after a gated tail, keep the tail's audio in front of the speech.
+                recent_tail = self.echo == "gate" and time.monotonic() < tail_end + PREROLL_FRAMES * FRAME_S
+                preroll = (preroll + [raw])[-(PREROLL_FRAMES + (TAIL_FRAMES if recent_tail else 0)):]
                 if hot >= need:
                     in_speech, voiced, silence_s, barged = True, list(preroll), 0.0, False
                     started = time.monotonic() - len(preroll) * FRAME_S

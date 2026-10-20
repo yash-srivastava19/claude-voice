@@ -30,6 +30,7 @@ const SUBMIT_DEBOUNCE_MS = 400
 const STOP_WORDS = /^(stop|wait|hold on|cancel|never mind|shut up)[.!]?$/i
 const VOICES_DIR = '~/.local/share/voice-mode/voices'
 const HELP = `/talk start, /talk stop     turn voice mode on or off
+/talk hush                  stop the reply being spoken; voice mode stays on
 /talk voices                list the voices
 /talk voice <name>          switch voice: a name from the list, a mix such as
                             af_heart:0.6+bf_emma:0.4, or one of your own
@@ -67,6 +68,8 @@ const v = {
   // Set by a barge-in or mid-turn speech: the rest of the step being streamed
   // is stale, so it stays on screen only. The next step speaks again.
   muteUntilNextStep: false,
+  // Set by Hush: the turn keeps working, but says nothing more until it ends.
+  isHushedTurn: false,
   // Speech delivered into the running turn, and whether a step has started since
   // (a step that starts after the delivery is the one that reads it).
   delivered: [] as string[],
@@ -157,6 +160,12 @@ function say($: EngineInterface, text: string) {
 function hush($: EngineInterface, why: string) {
   v.gen += 1
   void call($, 'POST', '/flush', { gen: v.gen, why }).catch(() => {})
+}
+
+// Hush: stop speaking now and stay quiet for the rest of the turn, which keeps working.
+function hushTurn($: EngineInterface, why: string) {
+  hush($, why)
+  if (v.runningTurn) v.isHushedTurn = true
 }
 
 async function submitPending($: EngineInterface) {
@@ -408,6 +417,10 @@ export const register: Register = (on, options) => {
       if (arg === 'voices') return { text: await listVoices($) }
       if (arg === 'voice') return { text: value ? await setVoice($, value) : `Voice: ${v.settings.voice}. /talk voices lists the others.` }
       if (arg === 'speed') return { text: value ? await setSpeed($, value) : `Speed: ${v.settings.speed}.` }
+      if (arg === 'hush') {
+        hushTurn($, 'hush command')
+        return { text: 'Hushed.' }
+      }
       if (arg === 'settings') return { text: `Voice: ${v.settings.voice}\nSpeed: ${v.settings.speed}\nYour voices folder: ${VOICES_DIR}` }
     } catch (err) {
       return { text: `voice: ${(err as Error).message}` }
@@ -428,7 +441,7 @@ export const register: Register = (on, options) => {
       return { text: `Voice mode could not start: ${(err as Error).message}` }
     }
     if (v.echo === 'gate') {
-      return { text: 'Voice mode on. Talk whenever you are ready. No echo cancellation here, so the mic pauses while I speak; type anything to interrupt, or use headphones and set VOICE_ECHO=open to talk over me. /talk stop to end.' }
+      return { text: 'Voice mode on. Talk whenever you are ready. No echo cancellation here, so the mic pauses while I speak. To interrupt, press Hush, run /talk hush, or send a message; with headphones, set VOICE_ECHO=open to talk over me. /talk stop to end.' }
     }
     return { text: 'Voice mode on. Talk whenever you are ready; say "stop" to interrupt. /talk stop to end.' }
   })
@@ -461,7 +474,7 @@ export const register: Register = (on, options) => {
     if (v.delivered.length) v.isDeliveryRead = true
     const splitter = new SpeechSplitter()
     const speak = (sentences: string[]) => {
-      if (v.muteUntilNextStep) return
+      if (v.muteUntilNextStep || v.isHushedTurn) return
       for (const s of sentences) say($, s)
     }
     const stream = next(e)
@@ -477,6 +490,7 @@ export const register: Register = (on, options) => {
     if (e.agentId) return result
     v.runningTurn = undefined
     v.muteUntilNextStep = false
+    v.isHushedTurn = false
     // Mid-turn speech no step read, or the engine refused, goes in as a prompt.
     const unread = v.isDeliveryRead ? [] : v.delivered
     v.pending = [...v.held, ...unread, ...v.pending]
@@ -500,13 +514,14 @@ export const register: Register = (on, options) => {
     const room = Math.max(10, e.props.bodyColumns - 50)
     const quote = last.length > room ? `${last.slice(0, room - 1)}…` : last
     const hint = now === 'thinking' && quote ? `"${quote}" · speak to add to this turn`
-      : now === 'speaking' && v.echo === 'gate' ? 'mic paused while I speak · type to interrupt'
+      : now === 'speaking' && v.echo === 'gate' ? 'mic paused while I speak · Hush or send a message to interrupt'
       : look.hint
 
     return (
       <Box>
         <Text color={look.color} bold>{`${glyph} ${now.padEnd(9)}`}</Text>
         <Text dimColor>{`  ${hint}  `}</Text>
+        {now === 'speaking' && <Button key="voice-hush" label="Hush" plain onPress={() => hushTurn($, 'hush button')} />}
         <Button key="voice-stop" label="Stop voice" plain onPress={() => void stop($)} />
       </Box>
     )
