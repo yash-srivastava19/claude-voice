@@ -5,7 +5,21 @@ Runs fully local (whisper.cpp + Kokoro). No API keys.
 
 ## Install
 
-Needs Claude Code 2.1.286+, macOS or Linux. On macOS, `brew install sox` first.
+### What you need
+
+| | macOS | Linux |
+|---|---|---|
+| Claude Code | 2.1.286+ | 2.1.286+ |
+| Audio tools | `brew install sox` | `alsa-utils` (`arecord`, `aplay`) |
+| curl | built in | your package manager |
+| uv | installed for you if missing | installed for you if missing |
+| Python | uses 3.11, 3.12 or 3.13 if you have one; otherwise uv downloads 3.13 | same |
+| Disk | about 1 GB (models and a Python environment) | same |
+
+Nothing else to set up by hand. On a slow connection, installing Python yourself
+first (`brew install python@3.13`, or your distro's package) saves a 70 MB download.
+
+### Steps
 
 1. Turn on plugin hooks (early access) in `~/.claude/settings.json`:
 
@@ -20,16 +34,53 @@ Needs Claude Code 2.1.286+, macOS or Linux. On macOS, `brew install sox` first.
    /plugin install voice@claude-voice
    ```
 
-3. Restart Claude Code and type `/talk start`. The first start downloads the
-   models (~500 MB, a few minutes).
+3. Restart Claude Code and type `/talk start`. The first start sets everything up
+   (about 500 MB of models, a few minutes). An interrupted download resumes on the
+   next `/talk start`.
 
 ## Use
 
-- Just talk. Use headphones.
-- Talk over Claude to interrupt; say "stop" to cancel.
+- Just talk.
+- Say "stop" to cancel a reply.
 - After 2 minutes of quiet it sleeps; say "hey Claude" to wake it.
 - `/talk stop` to end.
-- Log: `~/.local/share/voice-mode/voiced.log`
+
+### Speakers, headphones, and talking over Claude
+
+On speakers the mic hears Claude too. How voice mode deals with that depends on
+what your machine can do; `/talk start` says which one you got.
+
+| Mode | When | Talk over Claude? |
+|---|---|---|
+| `aec` | Linux with the echo-cancel config below | yes: Claude's voice is subtracted from the mic |
+| `gate` | everything else, including macOS speakers | no: the mic pauses while Claude speaks; type anything to interrupt |
+| `open` | you set it, for headphones | yes: nothing is held back |
+
+With headphones, put `"VOICE_ECHO": "open"` in the `env` block of
+`~/.claude/settings.json` to talk over Claude. Don't use `open` on speakers: Claude
+will hear itself and answer its own voice.
+
+**Linux echo cancellation.** Copy the PipeWire config from this repo, then restart
+PipeWire:
+
+```
+mkdir -p ~/.config/pipewire/pipewire.conf.d
+cp pipewire/60-claude-voice-echo-cancel.conf ~/.config/pipewire/pipewire.conf.d/
+systemctl --user restart pipewire pipewire-pulse
+```
+
+The next `/talk start` uses it. Delete the file and restart PipeWire to undo.
+
+## Troubleshooting
+
+- **Setup failed.** The message shows the step and the error. The full output is in
+  `~/.local/share/voice-mode/install.log`. Rerun with
+  `sh ~/.claude/plugins/cache/claude-voice/voice/*/install.sh`; finished steps are
+  skipped.
+- **It answers itself, or drops what you said.** Check the mode on the `audio:` line
+  of the log. `open` on speakers causes this; unset `VOICE_ECHO`.
+- **Daemon log:** `~/.local/share/voice-mode/voiced.log`, one line per thing heard,
+  dropped or spoken.
 
 ## Voices
 

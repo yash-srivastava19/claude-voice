@@ -51,6 +51,8 @@ const VOICE_CONTEXT = `Voice mode is on. The person is talking to you out loud t
 // resumes from $.state.
 const v = {
   socket: '',
+  // How the daemon keeps its own voice out of the mic: aec, gate or open (see voiced.py).
+  echo: '',
   poller: undefined as { cancel: () => void } | undefined,
   isPolling: false,
   failures: 0,
@@ -99,8 +101,16 @@ async function ensureInstalled($: EngineInterface) {
   const check = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--check'])
   if (check.exitCode === 0) return
   $.ui.toast('Voice: setting up (first run or after an update; the first run downloads about 500 MB).', { timeoutMs: 20_000 })
-  const { exitCode, stderr } = await $.process.run(['sh', `${$.plugin.root}/install.sh`], { timeoutMs: 600_000 })
-  if (exitCode !== 0) throw new Error(stderr.trim().split('\n').pop() || 'install failed; run install.sh in the plugin folder')
+  // Downloads resume, so a run cut off by the cap picks up where it stopped next time.
+  const { exitCode, stderr } = await $.process.run(['sh', `${$.plugin.root}/install.sh`], { timeoutMs: 1_800_000 })
+  if (exitCode !== 0) {
+    // install.sh explains a failure from its "voice: " line on, with the last lines of
+    // the tool that failed (uv's cause sits mid-chain, above "operation timed out").
+    const lines = stderr.trim().split('\n').filter(Boolean)
+    const at = lines.findIndex(l => l.startsWith('voice: '))
+    const why = (at >= 0 ? lines.slice(at).join('\n').slice('voice: '.length) : lines.slice(-8).join('\n')) || 'setup failed'
+    throw new Error(`${why}\nFull log: ~/.local/share/voice-mode/install.log. Run sh ${$.plugin.root}/install.sh to retry.`)
+  }
 }
 
 // Runs the daemon script with the voice environment's Python.
@@ -117,6 +127,7 @@ async function startDaemon($: EngineInterface) {
   const { exitCode, stdout, stderr } = await daemonScript($, ['--start'])
   if (exitCode !== 0) throw new Error(stderr.trim() || `voice daemon exited ${exitCode}`)
   v.socket = JSON.parse(stdout.trim().split('\n').pop() ?? '{}').socket
+  v.echo = (await call($, 'GET', '/health').catch(() => ({}))).echo ?? ''
   await call($, 'POST', '/config', v.settings).catch(err =>
     $.ui.toast(`voice: ${(err as Error).message}; keeping the previous voice`))
 }
@@ -416,6 +427,9 @@ export const register: Register = (on, options) => {
       await stop($)
       return { text: `Voice mode could not start: ${(err as Error).message}` }
     }
+    if (v.echo === 'gate') {
+      return { text: 'Voice mode on. Talk whenever you are ready. No echo cancellation here, so the mic pauses while I speak; type anything to interrupt, or use headphones and set VOICE_ECHO=open to talk over me. /talk stop to end.' }
+    }
     return { text: 'Voice mode on. Talk whenever you are ready; say "stop" to interrupt. /talk stop to end.' }
   })
 
@@ -485,7 +499,9 @@ export const register: Register = (on, options) => {
     const glyph = now === 'thinking' ? SPINNER[(await read($, tick)) % SPINNER.length] : look.glyph
     const room = Math.max(10, e.props.bodyColumns - 50)
     const quote = last.length > room ? `${last.slice(0, room - 1)}…` : last
-    const hint = now === 'thinking' && quote ? `"${quote}" · speak to add to this turn` : look.hint
+    const hint = now === 'thinking' && quote ? `"${quote}" · speak to add to this turn`
+      : now === 'speaking' && v.echo === 'gate' ? 'mic paused while I speak · type to interrupt'
+      : look.hint
 
     return (
       <Box>

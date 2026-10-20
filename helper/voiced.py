@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -38,7 +39,7 @@ LOG = Path(os.environ.get("VOICE_LOG") or HOME / "voiced.log")  # tests point th
 WHISPER_MODEL = os.environ.get("VOICE_WHISPER_MODEL", str(MODELS / "ggml-base.en.bin"))
 IS_MAC = sys.platform == "darwin"
 # Bumped with each release: `--start` replaces a running daemon of another version.
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 KOKORO_MODEL = os.environ.get("VOICE_KOKORO_MODEL", str(MODELS / "kokoro-v1.0.onnx"))
 KOKORO_VOICES = MODELS / "voices-v1.0.bin"
 # The mod sends the voice and speed it is configured with (POST /config); these
@@ -137,8 +138,18 @@ def strip_wake(text: str):
     return True, text[m.end():].strip()
 
 
-ECHO_WINDOW_S = 15
-ECHO_OVERLAP = 0.6
+# How the daemon keeps its own voice out of the mic, chosen once at start:
+#   aec   the mic and speaker are an echo-cancelled pair, so you can talk over Claude
+#   gate  no echo cancellation (speakers on macOS, Linux without the PipeWire config):
+#         the mic is ignored while Claude speaks and for ECHO_TAIL_S after
+#   open  nothing is held back; for headphones, where the mic never hears the speaker
+# VOICE_ECHO forces one; unset, it is "aec" when the echo-cancelled devices are in use
+# and "gate" otherwise.
+ECHO_MODES = ("aec", "gate", "open")
+ECHO_MODE = os.environ.get("VOICE_ECHO", "").strip().lower()
+# Speakers keep sounding a little after the last block is written, and a room echoes.
+ECHO_TAIL_S = float(os.environ.get("VOICE_ECHO_TAIL_S", "0.5"))
+ECHO_MATCH = 0.6  # share of heard words that sit in runs of what was playing
 # Short interruptions that always get through, even when Claude just said the same word.
 STOP_PHRASES = {"stop", "wait", "hold on", "cancel", "never mind", "shut up"}
 
@@ -151,22 +162,25 @@ def stem(word: str) -> str:
     return word[:-1] if len(word) > 3 and word.endswith("s") else word
 
 
-def is_echo(transcript: str, recent: list[str], during_speech: bool = False) -> bool:
-    """True when a transcript is mostly words the daemon itself just spoke.
+def is_echo(transcript: str, playing: list[str]) -> bool:
+    """True when a transcript is mostly the sentences that were playing as it was heard.
 
-    Speakers feed Claude's voice back into the mic, more so without echo cancellation;
-    this keeps those transcripts from going back to Claude as your words. One or two
-    words heard while Claude was talking count as echo when Claude said all of them.
+    The caller passes only sentences whose playback overlapped the utterance, so speech
+    while nothing played is never echo. Echo comes back as runs of Claude's words in
+    Claude's order; a reply reuses single words ("can you hear me?" after "I can hear
+    you"), so only runs count. Stop phrases always get through.
     """
     heard = [stem(w) for w in words(transcript)]
-    if not heard:
+    if not heard or not playing or " ".join(words(transcript)) in STOP_PHRASES:
         return False
-    spoken = {stem(w) for sentence in recent for w in words(sentence)}
+    spoken = [stem(w) for sentence in playing for w in words(sentence)]
+    blocks = SequenceMatcher(None, heard, spoken, autojunk=False).get_matching_blocks()
     if len(heard) < 3:
-        if not during_speech or " ".join(words(transcript)) in STOP_PHRASES:
-            return False
-        return all(w in spoken for w in heard)
-    return sum(w in spoken for w in heard) / len(heard) >= ECHO_OVERLAP
+        return any(block.size == len(heard) for block in blocks)
+    # Only runs of two or more words count: echo arrives as stretches of Claude's
+    # sentence, a reply picks single words out of it.
+    found = sum(block.size for block in blocks if block.size >= 2)
+    return found / len(heard) >= ECHO_MATCH
 
 
 def pw_node_exists(kind: str, name: str) -> bool:
@@ -388,6 +402,7 @@ class Player:
         self.proc = None
         self.rate = 0
         self.until = 0.0  # monotonic time at which everything written has played
+        self.cut_at = 0.0  # when kill last stopped sound mid-way
         self.lock = threading.RLock()  # _open calls kill while holding it
         self.resumed = threading.Event()  # cleared while a possible barge-in is checked
         self.resumed.set()
@@ -435,9 +450,15 @@ class Player:
     def busy(self):
         return self.until > time.monotonic()
 
+    def sound_end(self):
+        """When the speaker last went (or will go) quiet."""
+        return max(self.until, self.cut_at)
+
     def kill(self):
         with self.lock:
             proc, self.proc = self.proc, None
+        if self.until > time.monotonic():
+            self.cut_at = time.monotonic()
         self.until = 0.0
         if proc and proc.poll() is None:
             proc.kill()
@@ -485,11 +506,17 @@ class Daemon:
         self.mic_source = MIC_SOURCE or (AEC_SOURCE if pw_node_exists("sources", AEC_SOURCE) else "")
         sink = SPEAKER_SINK or (AEC_SINK if pw_node_exists("sinks", AEC_SINK) else "")
         self.player = Player(sink)
-        log(f"audio: mic {self.mic_source or 'default'}, speaker {sink or 'default'}")
+        aec = (self.mic_source == AEC_SOURCE and sink == AEC_SINK
+               and not os.environ.get("VOICE_MIC_CMD"))
+        if ECHO_MODE and ECHO_MODE not in ECHO_MODES:
+            log(f"VOICE_ECHO={ECHO_MODE!r} is not one of {', '.join(ECHO_MODES)}; choosing for you")
+        self.echo = ECHO_MODE if ECHO_MODE in ECHO_MODES else ("aec" if aec else "gate")
+        log(f"audio: mic {self.mic_source or 'default'}, speaker {sink or 'default'}, echo {self.echo}"
+            + (" (mic paused while speaking: no echo cancellation)" if self.echo == "gate" else ""))
         self.chunked_gen = -1  # only a reply's first sentence is split, so it starts sooner
         self.speaking = False
         self.last_played_gen = -1
-        self.recent_spoken = []  # (monotonic time, sentence), for echo detection
+        self.played = []  # (start, end, sentence) in monotonic time, for echo detection
         self.listening = True
         self.awake = True
         self.last_activity = time.monotonic()
@@ -595,9 +622,12 @@ class Daemon:
 
     def play(self, gen, text, rate, pcm):
         now = time.monotonic()
-        self.recent_spoken = [(t, s) for t, s in self.recent_spoken if now - t < ECHO_WINDOW_S][-9:]
-        self.recent_spoken.append((now, text))
+        start = max(now, self.player.until)
+        entry = [start, start + len(pcm) / 2 / rate, text]
+        self.played = [e for e in self.played if now - e[1] < 30] + [entry]
         done = self.player.write(pcm, rate, lambda: gen < self.gen or self.stopping.is_set())
+        if not done:
+            entry[1] = time.monotonic()
         log(f"queued {len(pcm) / 2 / rate:.2f}s of audio in {time.monotonic() - now:.2f}s"
             + ("" if done else ", cut"))
 
@@ -672,6 +702,7 @@ class Daemon:
         hot = 0  # consecutive frames over the threshold
         silence_s = 0.0
         barged = False
+        started = 0.0  # when the open utterance began
 
         while not self.stopping.is_set():
             raw = rec.stdout.read(FRAME * 2)
@@ -690,6 +721,18 @@ class Daemon:
                 self.player.resumed.set()  # a paused reply must not stay paused with the mic off
                 continue
 
+            # No echo cancellation: while Claude speaks the mic hears mostly Claude, so
+            # it is not listened to. Speech already under way is kept and sent on.
+            if self.echo == "gate" and (self.speaking
+                                        or time.monotonic() < self.player.sound_end() + ECHO_TAIL_S):
+                if in_speech and self.awake:
+                    audio = b"".join(voiced)
+                    log(f"utterance cut short by playback after {len(audio) / 2 / RATE:.1f}s")
+                    threading.Thread(target=self.transcribe, daemon=True,
+                                     args=(audio, False, started, time.monotonic())).start()
+                in_speech, voiced, preroll, hot = False, [], [], 0
+                continue
+
             threshold = BARGE_THRESHOLD if self.speaking else THRESHOLD
             need = BARGE_FRAMES if self.speaking else START_FRAMES
             hot = hot + 1 if prob >= threshold else 0
@@ -698,6 +741,7 @@ class Daemon:
                 preroll = (preroll + [raw])[-PREROLL_FRAMES:]
                 if hot >= need:
                     in_speech, voiced, silence_s, barged = True, list(preroll), 0.0, False
+                    started = time.monotonic() - len(preroll) * FRAME_S
                     if not self.awake:
                         continue  # asleep: no barge-in, no events, only a wake check at the end
                     if self.speaking:
@@ -720,13 +764,18 @@ class Daemon:
                     threading.Thread(target=self.check_wake, args=(audio,), daemon=True).start()
                     continue
                 log(f"utterance end after {len(audio) / 2 / RATE:.1f}s")
-                threading.Thread(target=self.transcribe, args=(audio, barged), daemon=True).start()
+                threading.Thread(target=self.transcribe, daemon=True,
+                                 args=(audio, barged, started, time.monotonic())).start()
 
         rec.kill()
 
-    def transcribe(self, audio, barged, strip_wake_phrase=False):
+    def transcribe(self, audio, barged, started=None, ended=None, strip_wake_phrase=False):
+        if ended is None:
+            ended = time.monotonic()
+        if started is None:
+            started = ended - len(audio) / 2 / RATE
         try:
-            text = self._transcribe(audio, barged, strip_wake_phrase)
+            text = self._transcribe(audio, started, ended, strip_wake_phrase)
         except Exception as err:  # every `hearing` must end in an utterance or a drop
             log("transcribe error:", repr(err))
             self.emit("dropped", reason="error")
@@ -743,7 +792,7 @@ class Daemon:
             self.last_activity = time.monotonic()
             self.emit("utterance", text=text, barged=barged)
 
-    def _transcribe(self, audio, barged, strip_wake_phrase):
+    def _transcribe(self, audio, started, ended, strip_wake_phrase):
         """Returns the transcript to deliver, or "" after emitting why it was dropped."""
         speech_s = len(audio) / 2 / RATE
         if speech_s < 0.4:
@@ -761,9 +810,8 @@ class Daemon:
         greeted = re.match(r"^\s*(hey|hi|okay|ok|yo)\b", text, re.IGNORECASE)
         if is_wake and (strip_wake_phrase or greeted):
             text = clean_transcript(rest)
-        now = time.monotonic()
-        recent = [s for at, s in self.recent_spoken if now - at < ECHO_WINDOW_S]
-        if text and is_echo(text, recent, during_speech=barged):
+        playing = [t for s, e, t in self.played if s < ended and e + ECHO_TAIL_S > started]
+        if text and is_echo(text, playing):
             log("dropped as echo of our own speech")
             self.emit("dropped", reason="echo")
             return ""
@@ -815,9 +863,10 @@ def make_handler(d: Daemon, server_ref):
         def do_GET(self):
             if self.path == "/events":
                 self.reply({"events": d.drain(), "speaking": d.speaking,
-                            "listening": d.listening, "gen": d.gen, "awake": d.awake})
+                            "listening": d.listening, "gen": d.gen, "awake": d.awake,
+                            "echo": d.echo})
             elif self.path == "/health":
-                self.reply({"ok": True, "pid": os.getpid(), "version": VERSION})
+                self.reply({"ok": True, "pid": os.getpid(), "version": VERSION, "echo": d.echo})
             elif self.path == "/config":
                 self.reply({"voice": d.tts.voice.name, "speed": d.tts.speed})
             else:
