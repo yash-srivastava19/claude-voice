@@ -92,7 +92,7 @@ The next `/talk start` uses it. Delete the file and restart PipeWire to undo.
 /talk speed 1.1              faster or slower (0.5 to 2.0)
 ```
 
-Built in: heart, bella, nicole, emma, michael, fenrir, puck, george, fable, plus
+Built in: heart, bella, nicole, scarlet, emma, michael, fenrir, puck, george, fable, plus
 the mixes honey and velvet. Any of Kokoro's English voices works by its id too.
 Your choice is saved; it is also under `/config`.
 
