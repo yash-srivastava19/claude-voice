@@ -39,7 +39,7 @@ LOG = Path(os.environ.get("VOICE_LOG") or HOME / "voiced.log")  # tests point th
 WHISPER_MODEL = os.environ.get("VOICE_WHISPER_MODEL", str(MODELS / "ggml-base.en.bin"))
 IS_MAC = sys.platform == "darwin"
 # Bumped with each release: `--start` replaces a running daemon of another version.
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 KOKORO_MODEL = os.environ.get("VOICE_KOKORO_MODEL", str(MODELS / "kokoro-v1.0.onnx"))
 KOKORO_VOICES = MODELS / "voices-v1.0.bin"
 # The mod sends the voice and speed it is configured with (POST /config); these
@@ -56,6 +56,7 @@ PRESETS = {
     "heart": ("af_heart", "warm, US female"),
     "bella": ("af_bella", "bright and expressive, US female"),
     "nicole": ("af_nicole", "soft, close to the mic, US female"),
+    "scarlet": ("af_sky", "light and airy, US female (Kokoro's sky)"),
     "emma": ("bf_emma", "calm, British female"),
     "michael": ("am_michael", "steady, US male"),
     "fenrir": ("am_fenrir", "deep, US male"),
