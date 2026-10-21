@@ -43,6 +43,10 @@ first (`brew install python@3.13`, or your distro's package) saves a 70 MB downl
 - Just talk.
 - To cut a reply short: say "stop" (on speakers, only once the mic is listening; see
   below), press **Hush** in the voice band, or run `/talk hush`.
+- "Uh-huh", "right" or "okay" while Claude talks just means go on: the reply carries
+  on. Said when Claude is quiet, they're a reply like any other.
+- Claude talks like a pair programmer: it says the point out loud and puts links,
+  paths, code and longer lists on screen, where they aren't read.
 - After 2 minutes of quiet it sleeps; say "hey Claude" to wake it.
 - `/talk stop` to end.
 

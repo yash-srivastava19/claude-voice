@@ -39,7 +39,7 @@ LOG = Path(os.environ.get("VOICE_LOG") or HOME / "voiced.log")  # tests point th
 WHISPER_MODEL = os.environ.get("VOICE_WHISPER_MODEL", str(MODELS / "ggml-base.en.bin"))
 IS_MAC = sys.platform == "darwin"
 # Bumped with each release: `--start` replaces a running daemon of another version.
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 KOKORO_MODEL = os.environ.get("VOICE_KOKORO_MODEL", str(MODELS / "kokoro-v1.0.onnx"))
 KOKORO_VOICES = MODELS / "voices-v1.0.bin"
 # The mod sends the voice and speed it is configured with (POST /config); these
@@ -154,6 +154,11 @@ TAIL_FRAMES = int(ECHO_TAIL_S / FRAME_S) + 1
 ECHO_MATCH = 0.6  # share of heard words that sit in runs of what was playing
 # Short interruptions that always get through, even when Claude just said the same word.
 STOP_PHRASES = {"stop", "wait", "hold on", "cancel", "never mind", "shut up"}
+# Listening noises. Said over Claude they mean "go on", not "stop", so the reply resumes;
+# said while Claude is quiet they are an answer and go through.
+BACKCHANNEL_WORDS = {"uh", "huh", "uhhuh", "mhm", "mm", "hmm", "mmhmm", "right", "okay", "ok",
+                     "yeah", "yep", "yup", "sure", "cool", "nice", "alright", "gotcha"}
+BACKCHANNEL_PHRASES = {"got it", "i see", "go on", "makes sense", "fair enough", "all right"}
 
 
 def words(text: str) -> list[str]:
@@ -183,6 +188,20 @@ def is_echo(transcript: str, playing: list[str]) -> bool:
     # sentence, a reply picks single words out of it.
     found = sum(block.size for block in blocks if block.size >= 2)
     return found / len(heard) >= ECHO_MATCH
+
+
+def is_backchannel(transcript: str) -> bool:
+    """True for a short listening noise such as "uh-huh", "right" or "okay, got it"."""
+    heard = words(transcript.replace("-", ""))
+    if not heard or len(heard) > 4:
+        return False
+    phrase = " ".join(heard)
+    if phrase in BACKCHANNEL_PHRASES:
+        return True
+    rest = phrase
+    for p in BACKCHANNEL_PHRASES:
+        rest = rest.replace(p, " ")
+    return all(w in BACKCHANNEL_WORDS for w in rest.split())
 
 
 def pw_node_exists(kind: str, name: str) -> bool:
@@ -786,6 +805,10 @@ class Daemon:
         except Exception as err:  # every `hearing` must end in an utterance or a drop
             log("transcribe error:", repr(err))
             self.emit("dropped", reason="error")
+            text = ""
+        if barged and text and is_backchannel(text):
+            log(f"backchannel while speaking, not a barge-in: {text!r}")
+            self.emit("dropped", reason="backchannel")
             text = ""
         if barged and text:
             self.flush(self.gen + 1, "barge-in")
