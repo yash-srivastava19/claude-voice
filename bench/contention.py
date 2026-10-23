@@ -15,9 +15,12 @@ import stt_eval, tts_eval
 BENCH = stt_eval.BENCH
 
 
+NICE = {"stt": 5, "tts": 5}  # equal unless TTS_NICE says otherwise
+
+
 def stt_side(name, threads, seconds):
     import soundfile as sf
-    os.nice(10)
+    os.nice(NICE["stt"])
     stt_eval.THREADS = threads
     run = stt_eval.ENGINES[name]()
     items = [i for i in json.loads((stt_eval.SET / "manifest.json").read_text()) if i["dur"] <= 5][:40]
@@ -33,7 +36,7 @@ def stt_side(name, threads, seconds):
 
 
 def tts_side(name, threads, seconds):
-    os.nice(10)
+    os.nice(int(os.environ.get("TTS_NICE", NICE["tts"])))
     e = tts_eval.ENGINES[name]
     run = e() if threads is None else _with_threads(name, threads)
     run(tts_eval.FIRST)
@@ -71,7 +74,7 @@ def main():
     alone_t = json.loads(spawn("tts", tts, tt, secs).communicate()[0])
     a, b = spawn("stt", stt, st, secs), spawn("tts", tts, tt, secs)
     both_s, both_t = json.loads(a.communicate()[0]), json.loads(b.communicate()[0])
-    print(f"{stt} (t={st}) + {tts} (t={tt or 'default'})")
+    print(f"{stt} (t={st}) + {tts} (t={tt or 'default'}), tts nice {os.environ.get('TTS_NICE', NICE['tts'])}")
     print(f"  stt ≤5s clip  alone med/p90 {q(alone_s)[0]:.2f}/{q(alone_s)[1]:.2f}s   together {q(both_s)[0]:.2f}/{q(both_s)[1]:.2f}s")
     print(f"  tts rtf       alone med/p90 {q(alone_t)[0]:.2f}/{q(alone_t)[1]:.2f}    together {q(both_t)[0]:.2f}/{q(both_t)[1]:.2f}")
 
