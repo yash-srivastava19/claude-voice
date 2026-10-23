@@ -1,6 +1,6 @@
 {
   "name": "voice",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Hands-free voice conversation: talk to Claude, hear the prose, see diagrams and tables on screen",
   "author": {
     "name": "yash-srivastava19"
@@ -20,6 +20,12 @@
       "default": 1.05,
       "min": 0.5,
       "max": 2.0
+    },
+    "fillers": {
+      "type": "boolean",
+      "title": "Fillers",
+      "description": "Say a short line (\"let me think\", \"running the tests\") when a turn goes quiet",
+      "default": true
     }
   }
 }

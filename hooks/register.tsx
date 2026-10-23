@@ -2,12 +2,12 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { VoicePhase } from '../types'
+import { decide, type Said } from './fillers'
 import { SpeechSplitter } from './speech'
 
 const isActive = atom({ plugin: 'voice', key: 'isActive' } as const, false)
 const phase = atom({ plugin: 'voice', key: 'phase' } as const, 'off' as VoicePhase)
 const heard = atom({ plugin: 'voice', key: 'heard' } as const, '')
-const tick = atom({ plugin: 'voice', key: 'tick' } as const, 0)
 
 const COMMAND = 'talk'
 // The band above the prompt: one glyph, color and hint per phase, so listening,
@@ -17,11 +17,12 @@ const PHASE_LOOK: Record<VoicePhase, { glyph: string; color?: string; hint: stri
   starting: { glyph: '…', color: 'gray', hint: 'loading the voice models (first run downloads them)' },
   listening: { glyph: '●', color: 'green', hint: 'say something · "stop" interrupts' },
   hearing: { glyph: '◉', color: 'greenBright', hint: 'hearing you…' },
-  thinking: { glyph: '◐', color: 'yellow', hint: 'working on it · speak to add to this turn' },
+  // Claude Code draws its own spinner while a turn runs; a second one only clutters.
+  thinking: { glyph: '◆', color: 'yellow', hint: 'speak to add to this turn' },
   speaking: { glyph: '▶', color: 'cyan', hint: 'talk over me to interrupt' },
   asleep: { glyph: '☾', color: 'magenta', hint: 'say "hey Claude" or type' },
+  nomic: { glyph: '✕', color: 'red', hint: 'mic lost · reconnecting' },
 }
-const SPINNER = ['◐', '◓', '◑', '◒']
 const POLL_MS = 250
 const KEEP_AWAKE_MS = 20_000
 // Once no speech segment is open, wait this long before submitting. Segments
@@ -35,7 +36,8 @@ const HELP = `/talk start, /talk stop     turn voice mode on or off
 /talk voice <name>          switch voice: a name from the list, a mix such as
                             af_heart:0.6+bf_emma:0.4, or one of your own
 /talk speed <0.5 to 2.0>    speaking rate (1 is normal)
-/talk settings              show the current voice and speed`
+/talk fillers on|off        short lines while I work ("let me think", "running the tests")
+/talk settings              show the current voice, speed and fillers`
 
 const VOICE_CONTEXT = `Voice mode is on. The person is talking to you out loud through speech recognition, and every prose sentence you write is read aloud to them by a text-to-speech voice. Fenced code blocks, tables and headings are shown on screen and are not read. Talk the way a good pair programmer does: you are both looking at the same screen.
 
@@ -66,6 +68,8 @@ Examples of the style:
 // resumes from $.state.
 const v = {
   socket: '',
+  // This session's id: the daemon serves the session that claimed it last.
+  owner: '',
   // How the daemon keeps its own voice out of the mic: aec, gate or open (see voiced.py).
   echo: '',
   poller: undefined as { cancel: () => void } | undefined,
@@ -91,20 +95,34 @@ const v = {
   // Mid-turn speech the engine refused to append; it goes in when the turn ends.
   held: [] as string[],
   hasSpokenThisTurn: false,
+  // What the fillers need (fillers.ts): when the turn began, when anything was last
+  // spoken, the tool running now, and which fillers this turn has had.
+  turnStartedAt: undefined as number | undefined,
+  lastSpokeAt: 0,
+  now: 0, // the clock at the last poll
+  tool: undefined as { startedAt: number; name: string; description?: string } | undefined,
+  turns: 0,
+  said: { thinking: false, toolLines: 0, stillWorking: 0 } as Said,
   // The daemon sleeps after a quiet spell; a running turn keeps it awake.
   lastKeepAwake: 0,
   // The plugin's settings (userConfig), from `register`'s options; /talk voice and
   // /talk speed change them through /config, which reloads the module with the new ones.
-  settings: { voice: 'michael', speed: 1.05 },
+  settings: { voice: 'michael', speed: 1.05, fillers: true },
+}
+
+// Another session's /talk start took voice over; this one turns voice off, quietly.
+class MovedAway extends Error {
+  constructor() { super('voice moved to another session') }
 }
 
 async function call($: EngineInterface, method: 'GET' | 'POST', path: string, body?: object) {
   const res = await $.http.fetch(`http://voice${path}`, {
     method,
     socketPath: v.socket,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(v.owner ? { 'X-Voice-Owner': v.owner } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   })
+  if (res.status === 409) throw new MovedAway()
   if (!res.ok) {
     const why = (() => { try { return JSON.parse(res.text).error } catch { return undefined } })()
     throw new Error(why ?? `voice daemon ${path}: HTTP ${res.status}`)
@@ -117,7 +135,7 @@ async function call($: EngineInterface, method: 'GET' | 'POST', path: string, bo
 async function ensureInstalled($: EngineInterface) {
   const check = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--check'])
   if (check.exitCode === 0) return
-  $.ui.toast('Voice: setting up (first run or after an update; the first run downloads about 500 MB).', { timeoutMs: 20_000 })
+  $.ui.toast('Voice: setting up (first run downloads about 1 GB, once).', { timeoutMs: 20_000 })
   // Downloads resume, so a run cut off by the cap picks up where it stopped next time.
   const { exitCode, stderr } = await $.process.run(['sh', `${$.plugin.root}/install.sh`], { timeoutMs: 1_800_000 })
   if (exitCode !== 0) {
@@ -128,6 +146,17 @@ async function ensureInstalled($: EngineInterface) {
     const why = (at >= 0 ? lines.slice(at).join('\n').slice('voice: '.length) : lines.slice(-8).join('\n')) || 'setup failed'
     throw new Error(`${why}\nFull log: ~/.local/share/voice-mode/install.log. Run sh ${$.plugin.root}/install.sh to retry.`)
   }
+}
+
+// An install from an older version runs as it is and catches up in the background
+// (a better speech model, about 600 MB), so an update never makes /talk start wait.
+async function catchUpInBackground($: EngineInterface) {
+  const done = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--complete'])
+  if (done.exitCode === 0) return
+  const started = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--background'])
+  if (started.exitCode !== 0) return // one is already running, from an earlier /talk start
+  $.ui.toast('Voice: downloading a more accurate speech model in the background (about 600 MB). It is used from the next /talk start.', { timeoutMs: 15_000 })
+  modLog($, 'install incomplete: catching up in the background')
 }
 
 // Runs the daemon script with the voice environment's Python.
@@ -144,6 +173,8 @@ async function startDaemon($: EngineInterface) {
   const { exitCode, stdout, stderr } = await daemonScript($, ['--start'])
   if (exitCode !== 0) throw new Error(stderr.trim() || `voice daemon exited ${exitCode}`)
   v.socket = JSON.parse(stdout.trim().split('\n').pop() ?? '{}').socket
+  v.owner = await $.session.id()
+  await call($, 'POST', '/claim', { owner: v.owner })
   v.echo = (await call($, 'GET', '/health').catch(() => ({}))).echo ?? ''
   await call($, 'POST', '/config', v.settings).catch(err =>
     $.ui.toast(`voice: ${(err as Error).message}; keeping the previous voice`))
@@ -161,12 +192,32 @@ function syncGen(daemonGen: unknown) {
 }
 
 function say($: EngineInterface, text: string) {
+  v.lastSpokeAt = v.now
   if (!v.hasSpokenThisTurn) {
     v.hasSpokenThisTurn = true
     modLog($, `first sentence of turn sent (gen ${v.gen})`)
   }
   const tagged = v.gen
   v.sayChain = v.sayChain.then(() => call($, 'POST', '/say', { text, gen: tagged })).catch(() => {})
+}
+
+// A filler ("let me think", "running the tests") when a turn goes quiet; see fillers.ts.
+async function fill($: EngineInterface) {
+  if (!v.settings.fillers) return
+  const now = await read($, phase)
+  const line = decide({
+    now: v.now,
+    turnStartedAt: v.turnStartedAt,
+    lastSpokeAt: v.lastSpokeAt,
+    repliedThisTurn: v.hasSpokenThisTurn,
+    tool: v.tool,
+    turnNumber: v.turns,
+    canSpeak: !v.isHushedTurn && !v.muteUntilNextStep && v.openSegments === 0 && (now === 'thinking' || now === 'speaking'),
+  }, v.said)
+  if (!line) return
+  v.lastSpokeAt = v.now
+  const tagged = v.gen
+  v.sayChain = v.sayChain.then(() => call($, 'POST', '/say', { text: line, gen: tagged, filler: true })).catch(() => {})
 }
 
 // Stops speech now. Not chained behind queued sentences: the generation tag
@@ -255,7 +306,7 @@ async function poll($: EngineInterface) {
   if (v.isPolling) return
   v.isPolling = true
   try {
-    if ((await read($, phase)) === 'thinking') await update($, tick, n => n + 1)
+    v.now = await $.clock.now()
     const { events, gen } = await call($, 'GET', '/events')
     v.failures = 0
     syncGen(gen)
@@ -291,9 +342,19 @@ async function poll($: EngineInterface) {
         await update($, phase, () => 'speaking')
       } else if (ev.kind === 'idle') {
         await update($, phase, () => (v.runningTurn ? 'thinking' : 'listening'))
+      } else if (ev.kind === 'mic') {
+        const ok = (ev as { ok?: boolean }).ok
+        modLog($, ok ? 'mic back' : 'mic lost; reconnecting')
+        await update($, phase, () => (!ok ? 'nomic' : v.runningTurn ? 'thinking' : 'listening'))
       }
     }
-  } catch {
+    await fill($)
+  } catch (err) {
+    if (err instanceof MovedAway) {
+      await stop($, { keepDaemon: true })
+      $.ui.toast('Voice mode is on in another session now, so it is off here. /talk start takes it back.')
+      return
+    }
     v.failures += 1
     if (v.failures === 8) {
       // ~2 s without the daemon: it died or was shut down; bring it back once.
@@ -311,6 +372,7 @@ async function start($: EngineInterface) {
   await update($, phase, () => 'starting')
   await ensureInstalled($)
   await startDaemon($)
+  void catchUpInBackground($).catch(() => {})
   await update($, isActive, () => true)
   await update($, phase, () => (v.runningTurn ? 'thinking' : 'listening'))
   v.failures = 0
@@ -319,7 +381,8 @@ async function start($: EngineInterface) {
   v.poller = $.clock.every(POLL_MS, () => void poll($))
 }
 
-async function stop($: EngineInterface) {
+// keepDaemon: another session owns the daemon now; leave it running for them.
+async function stop($: EngineInterface, { keepDaemon = false } = {}) {
   v.poller?.cancel()
   v.poller = undefined
   v.submitTimer?.cancel()
@@ -327,11 +390,11 @@ async function stop($: EngineInterface) {
   await update($, isActive, () => false)
   await update($, phase, () => 'off')
   await update($, heard, () => '')
-  if (v.socket) await call($, 'POST', '/shutdown').catch(() => {})
+  if (v.socket && !keepDaemon) await call($, 'POST', '/shutdown').catch(() => {})
 }
 
 // Saves one of the plugin's settings the way the /config menu would.
-async function saveSetting($: EngineInterface, field: 'voice' | 'speed', value: string | number) {
+async function saveSetting($: EngineInterface, field: 'voice' | 'speed' | 'fillers', value: string | number | boolean) {
   const row = (await $.config.list()).find(r => /^voice(@[^.]*)?\./.test(r.key) && r.key.endsWith(`.${field}`))
   if (!row) return 'saved for this session only (no /config row found)'
   const { deny } = await $.config.set({ key: row.key, value })
@@ -370,7 +433,14 @@ async function preview($: EngineInterface, why: string, text: string) {
 }
 
 async function setVoice($: EngineInterface, name: string) {
-  const check = await daemonScript($, ['--check-voice', name])
+  let check = await daemonScript($, ['--check-voice', name])
+  if (check.exitCode === 2) {
+    // A built-in voice that isn't on disk yet: fetch it now, once.
+    $.ui.toast(`voice: downloading ${name} (about 70 MB, once)…`, { timeoutMs: 15_000 })
+    const fetched = await daemonScript($, ['--fetch-voice', name], 600_000)
+    if (fetched.exitCode !== 0) return `Could not download ${name}: ${fetched.stderr.trim().split('\n').pop() ?? 'offline?'}`
+    check = await daemonScript($, ['--check-voice', name])
+  }
   if (check.exitCode !== 0) return check.stderr.trim() || `No voice named ${name}.`
   v.settings = { ...v.settings, voice: name }
   if (await read($, isActive)) {
@@ -379,6 +449,14 @@ async function setVoice($: EngineInterface, name: string) {
   }
   const note = await saveSetting($, 'voice', name)
   return `Voice: ${name}${note ? ` (${note})` : ''}.`
+}
+
+async function setFillers($: EngineInterface, arg: string) {
+  const want = arg.toLowerCase()
+  if (want !== 'on' && want !== 'off') return `Fillers are ${v.settings.fillers ? 'on' : 'off'}. /talk fillers on or /talk fillers off.`
+  v.settings = { ...v.settings, fillers: want === 'on' }
+  const note = await saveSetting($, 'fillers', v.settings.fillers)
+  return `Fillers ${want}: ${want === 'on' ? 'I say a short line when a turn goes quiet' : 'silence while I work'}${note ? ` (${note})` : ''}.`
 }
 
 async function setSpeed($: EngineInterface, arg: string) {
@@ -396,6 +474,7 @@ async function setSpeed($: EngineInterface, arg: string) {
 export const register: Register = (on, options) => {
   if (typeof options.voice === 'string' && options.voice.trim()) v.settings.voice = options.voice.trim()
   if (typeof options.speed === 'number') v.settings.speed = options.speed
+  if (typeof options.fillers === 'boolean') v.settings.fillers = options.fillers
 
   on('session.start', async ($, e, next) => {
     // Resume first: a reload must never leave voice on with nothing polling.
@@ -411,7 +490,7 @@ export const register: Register = (on, options) => {
       .register({
         name: COMMAND,
         description: 'Talk to Claude hands-free: /talk start, /talk stop, /talk voices',
-        argumentHint: '[start|stop|voices|voice <name>|speed <n>|settings]',
+        argumentHint: '[start|stop|voices|voice <name>|speed <n>|fillers on|off|settings]',
         immediate: true,
       })
       .catch(err => $.ui.toast(`voice: could not register /${COMMAND}: ${(err as Error).message}`))
@@ -435,7 +514,8 @@ export const register: Register = (on, options) => {
         hushTurn($, 'hush command')
         return { text: 'Hushed.' }
       }
-      if (arg === 'settings') return { text: `Voice: ${v.settings.voice}\nSpeed: ${v.settings.speed}\nYour voices folder: ${VOICES_DIR}` }
+      if (arg === 'fillers') return { text: await setFillers($, value) }
+      if (arg === 'settings') return { text: `Voice: ${v.settings.voice}\nSpeed: ${v.settings.speed}\nFillers: ${v.settings.fillers ? 'on' : 'off'}\nYour voices folder: ${VOICES_DIR}` }
     } catch (err) {
       return { text: `voice: ${(err as Error).message}` }
     }
@@ -474,6 +554,11 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (!v.runningTurn) v.runningTurn = e.turnId // turn.start carries no agentId; keep the main turn
     v.hasSpokenThisTurn = false
+    if (e.turnId === v.runningTurn) { // a subagent's turn must not restart the fillers
+      v.turnStartedAt = v.lastSpokeAt = await $.clock.now()
+      v.said = { thinking: false, toolLines: 0, stillWorking: 0 }
+      v.turns += 1
+    }
     if (await read($, isActive)) {
       modLog($, `turn start ${e.turnId}`)
       await update($, phase, () => 'thinking')
@@ -499,10 +584,28 @@ export const register: Register = (on, options) => {
     speak(splitter.flush())
   })
 
+  // Tool runs are where a turn goes quiet; the log marks them so the gaps can be measured.
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId || !(await read($, isActive))) return next(e)
+    const description = 'description' in e && typeof e.description === 'string' && e.description ? e.description : undefined
+    modLog($, `tool start ${e.tool}${description ? `: ${description}` : ''}`)
+    const started = await $.clock.now()
+    const tool = { startedAt: started, name: e.tool, description }
+    v.tool = tool
+    try {
+      return await next(e)
+    } finally {
+      if (v.tool === tool) v.tool = undefined // a parallel call may have replaced it
+      modLog($, `tool end ${e.tool} (${((await $.clock.now()) - started) / 1000}s)`)
+    }
+  })
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId) return result
     v.runningTurn = undefined
+    v.turnStartedAt = undefined
+    v.tool = undefined
     v.muteUntilNextStep = false
     v.isHushedTurn = false
     // Mid-turn speech no step read, or the engine refused, goes in as a prompt.
@@ -524,17 +627,14 @@ export const register: Register = (on, options) => {
     const now = await read($, phase)
     const last = await read($, heard)
     const look = PHASE_LOOK[now]
-    const glyph = now === 'thinking' ? SPINNER[(await read($, tick)) % SPINNER.length] : look.glyph
-    const room = Math.max(10, e.props.bodyColumns - 50)
-    const quote = last.length > room ? `${last.slice(0, room - 1)}…` : last
-    const hint = now === 'thinking' && quote ? `"${quote}" · speak to add to this turn`
+    const hint = now === 'thinking' && last ? `"${last}"`
       : now === 'speaking' && v.echo === 'gate' ? 'mic paused while I speak · Hush or send a message to interrupt'
       : look.hint
 
     return (
       <Box>
-        <Text color={look.color} bold>{`${glyph} ${now.padEnd(9)}`}</Text>
-        <Text dimColor>{`  ${hint}  `}</Text>
+        <Text color={look.color} bold>{`${look.glyph} ${now.padEnd(9)}`}</Text>
+        <Box flexShrink={1}><Text dimColor wrap="truncate-end">{`  ${hint}  `}</Text></Box>
         {now === 'speaking' && <Button key="voice-hush" label="Hush" plain onPress={() => hushTurn($, 'hush button')} />}
         <Button key="voice-stop" label="Stop voice" plain onPress={() => void stop($)} />
       </Box>
