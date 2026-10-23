@@ -1,7 +1,6 @@
 """Text normalization: what the voice model is given to say."""
 import pytest
 
-from conftest import HELPER  # noqa: F401  (puts helper/ on the path)
 from voice.processors.speakable import speakable
 
 

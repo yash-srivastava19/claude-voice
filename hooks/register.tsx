@@ -118,7 +118,7 @@ async function call($: EngineInterface, method: 'GET' | 'POST', path: string, bo
 async function ensureInstalled($: EngineInterface) {
   const check = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--check'])
   if (check.exitCode === 0) return
-  $.ui.toast('Voice: setting up (first run or after an update; the first run downloads about 500 MB).', { timeoutMs: 20_000 })
+  $.ui.toast('Voice: setting up (first run downloads about 1 GB, once).', { timeoutMs: 20_000 })
   // Downloads resume, so a run cut off by the cap picks up where it stopped next time.
   const { exitCode, stderr } = await $.process.run(['sh', `${$.plugin.root}/install.sh`], { timeoutMs: 1_800_000 })
   if (exitCode !== 0) {
@@ -129,6 +129,16 @@ async function ensureInstalled($: EngineInterface) {
     const why = (at >= 0 ? lines.slice(at).join('\n').slice('voice: '.length) : lines.slice(-8).join('\n')) || 'setup failed'
     throw new Error(`${why}\nFull log: ~/.local/share/voice-mode/install.log. Run sh ${$.plugin.root}/install.sh to retry.`)
   }
+}
+
+// An install from an older version runs as it is and catches up in the background
+// (a better speech model, about 600 MB), so an update never makes /talk start wait.
+async function catchUpInBackground($: EngineInterface) {
+  const done = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--complete'])
+  if (done.exitCode === 0) return
+  await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--background'])
+  $.ui.toast('Voice: downloading a more accurate speech model in the background (about 600 MB). It is used from the next /talk start.', { timeoutMs: 15_000 })
+  modLog($, 'install incomplete: catching up in the background')
 }
 
 // Runs the daemon script with the voice environment's Python.
@@ -316,6 +326,7 @@ async function start($: EngineInterface) {
   await update($, phase, () => 'starting')
   await ensureInstalled($)
   await startDaemon($)
+  void catchUpInBackground($).catch(() => {})
   await update($, isActive, () => true)
   await update($, phase, () => (v.runningTurn ? 'thinking' : 'listening'))
   v.failures = 0
@@ -375,7 +386,14 @@ async function preview($: EngineInterface, why: string, text: string) {
 }
 
 async function setVoice($: EngineInterface, name: string) {
-  const check = await daemonScript($, ['--check-voice', name])
+  let check = await daemonScript($, ['--check-voice', name])
+  if (check.exitCode === 2) {
+    // A built-in voice that isn't on disk yet: fetch it now, once.
+    $.ui.toast(`voice: downloading ${name} (about 70 MB, once)…`, { timeoutMs: 15_000 })
+    const fetched = await daemonScript($, ['--fetch-voice', name], 600_000)
+    if (fetched.exitCode !== 0) return `Could not download ${name}: ${fetched.stderr.trim().split('\n').pop() ?? 'offline?'}`
+    check = await daemonScript($, ['--check-voice', name])
+  }
   if (check.exitCode !== 0) return check.stderr.trim() || `No voice named ${name}.`
   v.settings = { ...v.settings, voice: name }
   if (await read($, isActive)) {

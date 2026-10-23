@@ -17,7 +17,7 @@ from turn_detect import RATE, FRAME, VAD, speech_probs
 
 BENCH = Path(os.environ.get("BENCH", Path.home() / ".cache/claude-voice-bench"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "helper"))
-from voice.services.sherpa.stt import ParakeetSTT  # the plugin's own adapter
+from voice.services.parakeet.stt import ParakeetSTT  # the plugin's own adapter
 
 
 def pauses(x, vad, min_frames):

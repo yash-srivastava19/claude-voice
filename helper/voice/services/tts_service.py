@@ -7,8 +7,8 @@ the engine's own sample rate, or (0, b"") for nothing to play. Each raises Value
 for a ref it cannot use. An engine loads and warms its model in the constructor.
 
 TTSSwitcher is what the pipeline holds (TTSService). It keeps the current voice and
-speed, loads an engine the first time a voice needs it, and keeps it loaded, so
-switching between voices of loaded engines is instant.
+speed and loads the engine the voice needs, so
+switching between voices of the same engine is instant.
 
 To add an engine: write services/<engine>/tts.py with a class meeting TTSEngine, and
 add a line to ENGINES. Voices for it then go in services/voices.py.
@@ -43,20 +43,24 @@ ENGINES = {
 }
 
 
-def _engine_class(name):
+def engine_class(name):
     return load(ENGINES, "text-to-speech", name)
 
 
 def check(name: str) -> VoiceSpec:
     """The voice a name means, if its engine can use it; raises ValueError otherwise."""
     spec = resolve(name)
-    _engine_class(spec.engine).check(spec.ref)
+    engine_class(spec.engine).check(spec.ref)
     return spec
 
 
 class TTSSwitcher:
-    def __init__(self, voice: str, speed: float, fallback: str = "michael"):
+    def __init__(self, voice: str, speed: float, fallback: str = "michael", engine_opts: dict | None = None):
+        """engine_opts: per engine name, the keyword arguments its constructor gets
+        (provider, threads, model), e.g. {"kokoro": {"provider": "cuda"}}. Switching to a
+        voice of another engine unloads the previous engine."""
         self.engines: dict[str, TTSEngine] = {}
+        self.engine_opts = engine_opts or {}
         self.speed = speed
         try:
             self._use(voice)
@@ -66,9 +70,11 @@ class TTSSwitcher:
 
     def _use(self, name):
         spec = check(name)
+        # One engine loaded at a time: Kokoro alone holds about 650 MB.
+        self.engines = {k: e for k, e in self.engines.items() if k == spec.engine}
         engine = self.engines.get(spec.engine)
         if engine is None:
-            engine = self.engines[spec.engine] = _engine_class(spec.engine)()
+            engine = self.engines[spec.engine] = engine_class(spec.engine)(**self.engine_opts.get(spec.engine, {}))
         self.loaded = engine.load_voice(spec.ref)
         self.engine, self.voice = engine, spec
 

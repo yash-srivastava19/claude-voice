@@ -4,7 +4,7 @@ Slow (loads the real models) and Linux-only (PulseAudio null sinks). Run with
     VOICE_DAEMON=path/to/voiced.py pytest tests/test_pipeline.py
 to check a given version; it defaults to this checkout.
 """
-import json, os, shutil, socket, subprocess, sys, time, wave
+import json, os, shutil, socket, subprocess, sys, time
 from pathlib import Path
 
 import numpy as np

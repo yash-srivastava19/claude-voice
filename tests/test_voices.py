@@ -1,6 +1,5 @@
 """The voice catalog: names to (engine, ref), and each engine's check. No models load."""
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path

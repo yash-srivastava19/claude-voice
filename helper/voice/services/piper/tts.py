@@ -10,11 +10,20 @@ from voice.config import MODELS
 PIPER_DIR = MODELS / "piper"
 
 
-def _folder(ref) -> Path:
+class NotDownloaded(ValueError):
+    pass
+
+
+def folder(ref) -> Path:
     path = Path(ref)
-    if not path.is_absolute():
-        path = PIPER_DIR / ref
-    if not (path.is_dir() and any(path.glob("*.onnx")) and (path / "tokens.txt").exists()):
+    return path if path.is_absolute() else PIPER_DIR / ref
+
+
+def _folder(ref) -> Path:
+    path = folder(ref)
+    if not path.exists():
+        raise NotDownloaded(f"not downloaded yet ({path})")
+    if not (any(path.glob("*.onnx")) and (path / "tokens.txt").exists()):
         raise ValueError(f"no Piper voice at {path}")
     return path
 
@@ -23,9 +32,14 @@ class PiperTTS:
     @staticmethod
     def check(ref):
         _folder(ref)
+        import importlib.util
+        if importlib.util.find_spec("sherpa_onnx") is None:
+            raise ValueError("Piper voices need the updated install, which downloads in the background "
+                             "after /talk start; try again in a few minutes")
 
-    def __init__(self, threads: int | None = None):
+    def __init__(self, threads: int | None = None, provider: str = "cpu"):
         self.threads = threads or 2  # leaves the cores to speech to text; still 4x faster than real time
+        self.provider = provider
         self.models = {}
         self.lock = threading.Lock()
 
@@ -36,7 +50,7 @@ class PiperTTS:
             cfg = so.OfflineTtsConfig(model=so.OfflineTtsModelConfig(
                 vits=so.OfflineTtsVitsModelConfig(model=str(next(d.glob("*.onnx"))), tokens=str(d / "tokens.txt"),
                                                   data_dir=str(d / "espeak-ng-data")),
-                num_threads=self.threads), max_num_sentences=1)
+                num_threads=self.threads, provider=self.provider), max_num_sentences=1)
             tts = so.OfflineTts(cfg)
             tts.generate("Sure, so here is how the whole thing fits together.", sid=0, speed=1.0)  # warm-up
             self.models[d] = tts

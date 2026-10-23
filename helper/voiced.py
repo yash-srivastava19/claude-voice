@@ -95,8 +95,10 @@ def make_stt(stt_service):
             return stt
         except Exception as err:
             log(f"stt: {STT_ENGINE} unavailable ({err!r}); using whisper")
-    log(f"stt: whisper ({WHISPER_MODEL})")
-    return stt_service.create("whisper", model=WHISPER_MODEL, language="en")
+    # base.en is installed only with VOICE_STT=whisper; tiny.en always is (the wake word uses it).
+    model = WHISPER_MODEL if Path(WHISPER_MODEL).exists() else WAKE_MODEL
+    log(f"stt: whisper ({model})")
+    return stt_service.create("whisper", model=model, language="en")
 
 
 def make_wake_stt(stt_service):
@@ -123,13 +125,29 @@ def main():
     if "--voices" in sys.argv:
         print(json.dumps(list_voices()))
         sys.exit(0)
-    if "--check-voice" in sys.argv:
+    if "--check-voice" in sys.argv:  # exit 0 usable, 2 needs --fetch-voice, 1 no such voice
+        from voice.services.piper.tts import NotDownloaded
         from voice.services.tts_service import check
+        from voice.services.voices import resolve
+        name = sys.argv[sys.argv.index("--check-voice") + 1] if len(sys.argv) > sys.argv.index("--check-voice") + 1 else ""
         try:
-            check(sys.argv[sys.argv.index("--check-voice") + 1])
-        except (ValueError, OSError, IndexError) as err:
+            check(name)
+        except NotDownloaded:
+            spec = resolve(name)
+            print(f"{name} isn't downloaded yet" + (f"; fetching it from {spec.download}" if spec.download else ""), file=sys.stderr)
+            sys.exit(2 if spec.download else 1)
+        except (ValueError, OSError) as err:
             print(err, file=sys.stderr)
             sys.exit(1)
+        sys.exit(0)
+    if "--fetch-voice" in sys.argv:
+        from voice.services.download import fetch_folder
+        from voice.services.piper.tts import folder
+        from voice.services.voices import resolve
+        spec = resolve(sys.argv[sys.argv.index("--fetch-voice") + 1])
+        if not spec.download:
+            sys.exit(f"{spec.name} has nothing to download")
+        fetch_folder(spec.download, folder(spec.ref))
         sys.exit(0)
     if alive():
         log("another daemon owns", SOCK)

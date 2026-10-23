@@ -18,7 +18,18 @@ V="${VOICE_HOME:-$HOME/.local/share/voice-mode}"
 # Bump when a release needs new packages or models; an older install then reruns
 # this on the next /talk start (finished downloads are skipped).
 SETUP=2
+# --check: installed enough to run (the marker). --complete: has everything this version
+# would install, so an older install can catch up with --background without making
+# anyone wait at /talk start.
 if [ "${1:-}" = "--check" ]; then [ "$(cat "$V/.installed" 2>/dev/null)" = "$SETUP" ]; exit; fi
+if [ "${1:-}" = "--complete" ]; then
+  [ -d "$V/models/parakeet-tdt-0.6b-v2-int8" ] && "$V/venv/bin/python" -c "import sherpa_onnx" 2>/dev/null; exit
+fi
+if [ "${1:-}" = "--background" ]; then
+  mkdir "$V/.upgrading" 2>/dev/null || exit 0  # one at a time
+  (trap 'rmdir "$V/.upgrading"' EXIT; nohup sh "$0" >> "$V/install.log" 2>&1) </dev/null >/dev/null 2>&1 &
+  exit 0
+fi
 
 mkdir -p "$V/models" "$V/voices"
 LOG="$V/install.log"
@@ -73,9 +84,9 @@ if [ ! -x "$VPY" ]; then
 fi
 step "Installing Python packages..."
 run "installing the Python packages failed" \
-  uv pip install -q --python "$VPY" kokoro-onnx onnxruntime numpy pywhispercpp
+  uv pip install -q --python "$VPY" kokoro-onnx onnxruntime numpy pywhispercpp sherpa-onnx
 
-step "Downloading models (about 500 MB, once)..."
+step "Downloading models (about 1 GB, once)..."
 get() {  # get <file> <url>
   [ -s "$V/models/$1" ] && return
   step "  $1"
@@ -96,9 +107,21 @@ K=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
 W=https://huggingface.co/ggerganov/whisper.cpp/resolve/main
 get kokoro-v1.0.onnx  "$K/kokoro-v1.0.onnx"
 get voices-v1.0.bin   "$K/voices-v1.0.bin"
-get ggml-base.en.bin  "$W/ggml-base.en.bin"
+[ "${VOICE_STT:-}" = whisper ] && get ggml-base.en.bin "$W/ggml-base.en.bin"
 get ggml-tiny.en.bin  "$W/ggml-tiny.en.bin"
 get silero_vad.onnx   https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx
+
+unpack() {  # unpack <folder under models/> <url of a .tar.bz2 holding one folder>
+  [ -d "$V/models/$1" ] && return
+  name=$(basename "$2")
+  get "$name" "$2"
+  rm -rf "$V/models/.unpack" && mkdir -p "$V/models/.unpack" "$(dirname "$V/models/$1")"
+  tar -xjf "$V/models/$name" -C "$V/models/.unpack" || die "unpacking $name failed; delete $V/models/$name and run /talk start again"
+  mv "$V/models/.unpack/"* "$V/models/$1" && rm -rf "$V/models/.unpack" "$V/models/$name"
+}
+R=https://github.com/k2-fsa/sherpa-onnx/releases/download
+unpack parakeet-tdt-0.6b-v2-int8 "$R/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2"
+# Piper voices (ryan, lessac) are fetched the first time one is picked: voiced.py --fetch-voice.
 
 echo "$SETUP" > "$V/.installed"
 echo "Voice is installed."

@@ -23,8 +23,7 @@ class STTService(Protocol):
 
 ENGINES = {
     "whisper": ("voice.services.whisper.stt", "WhisperSTT"),
-    "moonshine": ("voice.services.sherpa.stt", "MoonshineSTT"),
-    "parakeet": ("voice.services.sherpa.stt", "ParakeetSTT"),
+    "parakeet": ("voice.services.parakeet.stt", "ParakeetSTT"),
 }
 
 

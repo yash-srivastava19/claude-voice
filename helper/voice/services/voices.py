@@ -17,6 +17,8 @@ from pathlib import Path
 
 from voice.config import USER_VOICES
 
+SHERPA_TTS = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models"
+
 
 @dataclass(frozen=True)
 class VoiceSpec:
@@ -24,6 +26,7 @@ class VoiceSpec:
     engine: str
     ref: str
     about: str = ""
+    download: str = ""  # where to fetch the voice's model the first time it is picked
 
 
 # Picked from Kokoro's best-rated English voices. A "+" joins voices into a mix,
@@ -42,8 +45,9 @@ PRESETS = [
     VoiceSpec("honey", "kokoro", "af_heart:0.6+af_bella:0.4", "mix of heart and bella"),
     VoiceSpec("velvet", "kokoro", "af_nicole:0.5+af_heart:0.5", "mix of nicole and heart"),
     # Piper: plainer than Kokoro, but about six times faster, so replies never stutter.
-    VoiceSpec("ryan", "piper", "ryan-medium", "clear, US male (Piper, fastest)"),
-    VoiceSpec("lessac", "piper", "lessac-medium", "clear, US female (Piper, fastest)"),
+    # Not installed up front; fetched (67 MB each) the first time one is picked.
+    VoiceSpec("ryan", "piper", "ryan-medium", "clear, US male (Piper, fastest)", f"{SHERPA_TTS}/vits-piper-en_US-ryan-medium.tar.bz2"),
+    VoiceSpec("lessac", "piper", "lessac-medium", "clear, US female (Piper, fastest)", f"{SHERPA_TTS}/vits-piper-en_US-lessac-medium.tar.bz2"),
 ]
 BY_NAME = {v.name: v for v in PRESETS}
 

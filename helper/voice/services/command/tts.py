@@ -13,6 +13,9 @@ class CommandTTS:
         if not os.access(ref, os.X_OK):
             raise ValueError(f"{ref} is not an executable file")
 
+    def __init__(self, **_):  # a program has no model, provider or threads
+        pass
+
     def load_voice(self, ref):
         self.check(ref)
         return ref

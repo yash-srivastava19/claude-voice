@@ -10,11 +10,18 @@ class KokoroTTS:
         import numpy as np
         style_for(ref, np)
 
-    def __init__(self, model: str = KOKORO_MODEL):
+    def __init__(self, model: str = KOKORO_MODEL, provider: str = "cpu", threads: int | None = None):
+        """provider: "cpu", "cuda" or "coreml" (needs onnxruntime built with it)."""
         import numpy as np
+        import onnxruntime as ort
         from kokoro_onnx import Kokoro
         self.np = np
-        self.model = Kokoro(model, str(KOKORO_VOICES))
+        opts = ort.SessionOptions()
+        if threads:
+            opts.intra_op_num_threads, opts.inter_op_num_threads = threads, 1
+        providers = {"cuda": ["CUDAExecutionProvider"], "coreml": ["CoreMLExecutionProvider"]}.get(provider, [])
+        session = ort.InferenceSession(model, sess_options=opts, providers=providers + ["CPUExecutionProvider"])
+        self.model = Kokoro.from_session(session, str(KOKORO_VOICES))
         self.styles = np.load(KOKORO_VOICES)
         # Warm up on a full sentence: the first real call is otherwise about twice as slow.
         for _ in range(2):
