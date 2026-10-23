@@ -73,9 +73,14 @@ def tts_configs(provider):
 # what each config process does -------------------------------------------------
 
 def rss_mb():
-    import resource
-    kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return kb / 1024 / (1024 if sys.platform == "darwin" else 1)  # bytes on macOS, KB on Linux
+    """Peak memory of this process. Linux's ru_maxrss carries the parent's peak across
+    exec, so a parent that just built the test set made every config read 3 GB; VmHWM
+    starts fresh at exec."""
+    try:
+        return int(next(l.split()[1] for l in open("/proc/self/status") if l.startswith("VmHWM"))) / 1024
+    except OSError:
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20  # macOS: bytes
 
 
 def run_stt(engine, opts, clips):
