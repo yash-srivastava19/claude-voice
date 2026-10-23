@@ -34,6 +34,25 @@ and above 1 the voice stutters.
 | Kokoro on OpenVINO | the model has a dynamic-rank op the OpenVINO CPU plugin rejects | `run.py tts` (earlier run) |
 | Capping Kokoro's threads | 4 threads slower than default alone and under load | contention |
 
+## Across machines
+
+Same harness (`run.py all`), same 181 clips, CPU only. The laptop row is a quick run
+(40 clips, 1 round); AWS is the full set, 2 rounds, load under 4.
+
+| | Laptop: i7-1255U, 12 threads | AWS c6a.4xlarge: EPYC 7R13, 16 vCPU |
+|---|---|---|
+| Parakeet errors (accented / Indian / read / jargon) | 18.0 / 16.7 / 2.2 / 6.3 % (subset) | 17.2 / 10.5 / 2.1 / 7.3 % (identical to the laptop's full-set run) |
+| Parakeet, a turn of 5 s or less | 0.43 s (p90 0.58) | 0.14 s (p90 0.21) |
+| Scarlet first clause / first sentence | 0.30 / 1.19 s | 0.19 / 0.62 s |
+| Scarlet RTF alone / with speech to text | 0.34 / 0.36 | 0.18 / 0.34 |
+| Ryan first sentence, RTF | 0.15 s, 0.05 | 0.17 s, 0.06 |
+| Speech to text while TTS runs, priority on | 0.61 s | 0.23 s |
+
+Same defaults hold on both: Parakeet, Kokoro, opener split, TTS at lower priority. On
+the 16-core machine nothing comes near stuttering; on the laptop the priority change is
+what keeps transcription fast. AWS memory numbers from this run are not used
+(ru_maxrss inherited the parent's peak; fixed since).
+
 ## Open
 
 - GPU (CUDA) and Apple Silicon numbers: `run.py --provider cuda|coreml` on those machines.
