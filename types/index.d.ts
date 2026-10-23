@@ -1,4 +1,4 @@
-export type VoicePhase = 'off' | 'starting' | 'listening' | 'hearing' | 'thinking' | 'speaking' | 'asleep'
+export type VoicePhase = 'off' | 'starting' | 'listening' | 'hearing' | 'thinking' | 'speaking' | 'asleep' | 'nomic'
 
 declare module 'claude-code' {
   interface PluginState {

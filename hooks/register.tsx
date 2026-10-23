@@ -20,6 +20,7 @@ const PHASE_LOOK: Record<VoicePhase, { glyph: string; color?: string; hint: stri
   thinking: { glyph: '◐', color: 'yellow', hint: 'working on it · speak to add to this turn' },
   speaking: { glyph: '▶', color: 'cyan', hint: 'talk over me to interrupt' },
   asleep: { glyph: '☾', color: 'magenta', hint: 'say "hey Claude" or type' },
+  nomic: { glyph: '✕', color: 'red', hint: 'mic lost · reconnecting' },
 }
 const SPINNER = ['◐', '◓', '◑', '◒']
 const POLL_MS = 250
@@ -291,6 +292,10 @@ async function poll($: EngineInterface) {
         await update($, phase, () => 'speaking')
       } else if (ev.kind === 'idle') {
         await update($, phase, () => (v.runningTurn ? 'thinking' : 'listening'))
+      } else if (ev.kind === 'mic') {
+        const ok = (ev as { ok?: boolean }).ok
+        modLog($, ok ? 'mic back' : 'mic lost; reconnecting')
+        await update($, phase, () => (!ok ? 'nomic' : v.runningTurn ? 'thinking' : 'listening'))
       }
     }
   } catch {

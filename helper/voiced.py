@@ -710,10 +710,12 @@ class Daemon:
         else:
             cmd = ["arecord", "-q", "-f", "S16_LE", "-r", str(RATE), "-c", "1", "-t", "raw"]
         log("mic:", " ".join(cmd[:4]), self.mic_source or "default source")
-        rec = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        )
+
+        def record():
+            return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+        rec = record()
+        lost = 0  # recorder restarts since audio last came in
         state = np.zeros((2, 1, 128), dtype=np.float32)
         context = np.zeros((1, 64), dtype=np.float32)
         sr = np.array(RATE, dtype=np.int64)
@@ -728,8 +730,28 @@ class Daemon:
         while not self.stopping.is_set():
             raw = rec.stdout.read(FRAME * 2)
             if len(raw) < FRAME * 2:
-                log("mic stream ended")
-                break
+                # The recorder quit: the audio server restarted, or the device went away.
+                # Keep trying, so voice mode comes back when the mic does.
+                rec.kill()
+                rec.wait()
+                if self.stopping.is_set():
+                    break
+                if lost == 0:
+                    log("mic stream ended; reconnecting")
+                    self.emit("mic", ok=False)
+                    if in_speech and self.awake:
+                        self.emit("dropped", reason="mic")
+                lost += 1
+                self.stopping.wait(min(5.0, 0.5 * lost))
+                rec = record()
+                state = np.zeros((2, 1, 128), dtype=np.float32)
+                context = np.zeros((1, 64), dtype=np.float32)
+                preroll, voiced, in_speech, hot = [], [], False, 0
+                continue
+            if lost:
+                log(f"mic back after {lost} restart(s)")
+                self.emit("mic", ok=True)
+                lost = 0
             pcm = np.frombuffer(raw, dtype=np.int16)
             x = (pcm.astype(np.float32) / 32768.0).reshape(1, -1)
             out, state = self.vad.run(None, {"input": np.concatenate([context, x], axis=1),
