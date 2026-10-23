@@ -62,7 +62,7 @@ def contention(doc):
     print(f"\nboth at once on {machine_name(doc['machine'])} (speech to text seconds per turn; text to speech RTF, over 1 stutters)")
     print(f"  {'pair':40} {'stt alone':>9} {'equal':>7} {'tts lower':>9}   {'tts alone':>9} {'equal':>7} {'lower':>7}")
     for label, row in doc["runs"].items():
-        med = lambda k: statistics.median(row[k]) if row.get(k) else float("nan")
+        med = lambda k: statistics.median(row[k]) if row.get(k) else float("inf")  # inf: starved, finished nothing
         print(f"  {label:40} {med('stt_alone'):8.2f}s {med('stt_equal'):6.2f}s {med('stt_tts_lower'):8.2f}s   "
               f"{med('tts_alone'):9.2f} {med('tts_equal'):7.2f} {med('tts_tts_lower'):7.2f}")
 
