@@ -584,14 +584,15 @@ export const register: Register = (on, options) => {
   // Tool runs are where a turn goes quiet; the log marks them so the gaps can be measured.
   on('tool.call', async ($, e, next) => {
     if (e.agentId || !(await read($, isActive))) return next(e)
-    const what = 'description' in e && typeof e.description === 'string' ? `: ${e.description}` : ''
-    modLog($, `tool start ${e.tool}${what}`)
+    const description = 'description' in e && typeof e.description === 'string' && e.description ? e.description : undefined
+    modLog($, `tool start ${e.tool}${description ? `: ${description}` : ''}`)
     const started = await $.clock.now()
-    v.tool = { startedAt: started, name: e.tool, description: what.slice(2) || undefined }
+    const tool = { startedAt: started, name: e.tool, description }
+    v.tool = tool
     try {
       return await next(e)
     } finally {
-      v.tool = undefined
+      if (v.tool === tool) v.tool = undefined // a parallel call may have replaced it
       modLog($, `tool end ${e.tool} (${((await $.clock.now()) - started) / 1000}s)`)
     }
   })

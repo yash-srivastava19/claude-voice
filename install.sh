@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the voice daemon's Python environment and models (about 500 MB) into
+# Installs the voice daemon's Python environment and models (about 1 GB) into
 # ~/.local/share/voice-mode. The plugin runs this on the first /talk start; running
 # it by hand is fine too. Safe to run again: whatever is already in place is kept,
 # and an interrupted download resumes where it stopped.
@@ -15,8 +15,9 @@
 set -eu
 
 V="${VOICE_HOME:-$HOME/.local/share/voice-mode}"
-# Bump when a release needs new packages or models; an older install then reruns
-# this on the next /talk start (finished downloads are skipped).
+# Bump only when a release can't run without new packages or models: an older install
+# then reruns this at /talk start, and the person waits. Additions that are better but
+# optional (Parakeet, sherpa-onnx) arrive through --complete/--background instead.
 SETUP=2
 # --check: installed enough to run (the marker). --complete: has everything this version
 # would install, so an older install can catch up with --background without making

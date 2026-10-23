@@ -57,3 +57,15 @@ what keeps transcription fast. AWS memory numbers from this run are not used
 
 - GPU (CUDA) and Apple Silicon numbers: `run.py --provider cuda|coreml` on those machines.
 - Fillers: on by default for the A/B; kept if `turn_report.py` shows less dead air and the person prefers them.
+- Other harnesses. The daemon is harness-neutral (Unix socket); each needs a thin adapter
+  that speaks the reply and submits the person's words into the open session.
+  - Codex 0.150: both directions verified live in tmux. The `Stop` hook carries
+    `last_assistant_message`; `codex queue --thread <session_id> --message <text>` lands in
+    the running TUI and starts a turn. New hooks need one trust prompt.
+  - OpenCode 1.18: the plugin API has streamed text parts (`message.part.updated`) and
+    `client.tui.appendPrompt` + `submitPrompt`. Not verified: no model answered on this
+    laptop (hosted models errored, the local one timed out).
+  - Grok 1.0: the `Stop` hook carries `lastAssistantMessage`; no way found yet to submit
+    into a running session from outside.
+  - Before any adapter: move the markdown-to-speech filter (hooks/speech.ts) where every
+    adapter can use it, with one shared set of test cases.

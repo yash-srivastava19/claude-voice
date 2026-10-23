@@ -2,7 +2,7 @@
 the gap until the next "hearing". A gap under the submit debounce means the mod joined
 the two pieces into one prompt; without the debounce they would be two prompts.
 
-    python bench/debounce.py [log]
+    python bench/experiments/debounce.py [log]
 """
 import re, sys
 from datetime import datetime

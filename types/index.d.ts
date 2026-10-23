@@ -6,7 +6,6 @@ declare module 'claude-code' {
       isActive: boolean
       phase: VoicePhase
       heard: string
-      /** Advances while thinking, to animate the spinner. */
     }
   }
 }

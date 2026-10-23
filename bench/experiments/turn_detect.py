@@ -1,6 +1,6 @@
 """Smart Turn v3.2 on real speech: can it tell "finished" from "pausing mid-sentence"?
 
-    $BENCH/venv/bin/python bench/turn_detect.py
+    $BENCH/venv/bin/python bench/experiments/turn_detect.py
 
 Finished: whole clips from the test set (EdAcc conversation, LibriSpeech reading).
 Not finished: the same clips cut at a real pause between 25% and 75% of the way in

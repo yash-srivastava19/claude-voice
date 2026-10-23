@@ -94,7 +94,7 @@ class Daemon:
     def close(self):
         try:
             self.call("POST", "/shutdown")
-        except OSError:
+        except (OSError, AssertionError):  # it may exit before the reply is written
             pass
         time.sleep(1)
         for m in self.modules:

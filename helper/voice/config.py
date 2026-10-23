@@ -12,7 +12,7 @@ LOG = Path(os.environ.get("VOICE_LOG") or HOME / "voiced.log")  # tests point th
 IS_MAC = sys.platform == "darwin"
 # Bumped with each release. `--start` replaces a running daemon whose version or BUILD
 # differs, so an updated plugin never keeps talking to the old code.
-VERSION = "0.2.3"
+VERSION = "0.3.0"
 
 
 def _build():

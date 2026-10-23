@@ -1,9 +1,8 @@
 """The transcript filters: pure functions, no models or audio devices needed."""
 import pytest
 
-from conftest import voice
+from voice.processors import filters as f
 
-f = voice.filters
 
 
 @pytest.mark.parametrize("text,expected", [

@@ -60,7 +60,11 @@ def make_handler(d):
 
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n) or b"{}")
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                self.reply({"error": "body is not JSON"}, 400)
+                return
             if self.path == "/claim":
                 d.claim(str(body.get("owner") or "") or None)
                 self.reply({"ok": True, "gen": d.status()["gen"]})

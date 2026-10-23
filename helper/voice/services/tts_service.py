@@ -23,6 +23,9 @@ from voice.services.voices import VoiceSpec, resolve
 
 
 class TTSEngine(Protocol):
+    @staticmethod
+    def check(ref: str) -> None: ...  # raises ValueError for a voice it can't load; loads nothing
+
     def load_voice(self, ref: str) -> Any: ...
 
     def synthesize(self, text: str, voice: Any, speed: float) -> tuple[int, bytes]: ...

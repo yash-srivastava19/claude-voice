@@ -1,5 +1,6 @@
 // What a person says while they work, so a pause never sounds like a dropped call.
-// Pure: decide() looks at the moment and returns a line to say, or nothing. The mod
+// decide() looks at the moment and returns a line to say, or nothing, and marks it in
+// `said` so it isn't repeated; no other side effects. The mod
 // calls it from its poll loop and speaks the line as a filler (tagged, so
 // bench/turn_report.py tells it apart from the reply).
 
@@ -23,12 +24,14 @@ const STILL = ['Still working on it.', 'Nearly there.', 'Still going.']
 // is heard, and naming it then is stale (the 0.9 s Bash calls in the first filler drive).
 const TOOL_NAMED_AFTER = 1500
 const QUIET_BEFORE_TOOL_LINE = 3000
+const THINKING_AFTER = 1500
+const QUIET_BEFORE_STILL = 8000
 
 // Each rule: when it applies, what it says, and how it marks the turn so it doesn't repeat.
 const RULES: { when: (m: Moment, s: Said) => boolean; line: (m: Moment, s: Said) => string; mark: (s: Said, m: Moment) => void }[] = [
   {
     // The turn went in and nothing came back within 1.5 s.
-    when: (m, s) => m.turnStartedAt !== undefined && !m.repliedThisTurn && !s.thinking && !m.tool && m.now - m.turnStartedAt > 1500,
+    when: (m, s) => m.turnStartedAt !== undefined && !m.repliedThisTurn && !s.thinking && !m.tool && m.now - m.turnStartedAt > THINKING_AFTER,
     line: m => THINKING[m.turnNumber % THINKING.length],
     mark: s => { s.thinking = true },
   },
@@ -41,7 +44,7 @@ const RULES: { when: (m: Moment, s: Said) => boolean; line: (m: Moment, s: Said)
   },
   {
     // A long tool run: an occasional word, at most twice a turn.
-    when: (m, s) => m.tool !== undefined && s.stillWorking < 2 && m.now - m.lastSpokeAt > 8000
+    when: (m, s) => m.tool !== undefined && s.stillWorking < 2 && m.now - m.lastSpokeAt > QUIET_BEFORE_STILL
       && m.now - m.tool.startedAt > TOOL_NAMED_AFTER,
     line: (_m, s) => STILL[s.stillWorking % STILL.length],
     mark: s => { s.stillWorking += 1 },

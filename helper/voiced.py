@@ -1,21 +1,26 @@
 """Voice daemon for the Claude Code `voice` mod: the entry point. The parts live in
 the voice package next to this file; voice/pipeline/task.py wires them together.
 
-Listens on the mic, detects turns with Silero VAD, transcribes with whisper.cpp,
-and speaks text with Kokoro. The mod talks to it over HTTP on a Unix socket:
+Listens on the mic, detects turns with Silero VAD, transcribes with Parakeet (whisper.cpp
+when Parakeet isn't installed), and speaks with Kokoro or Piper. The mod talks to it over
+HTTP on a Unix socket (voice/pipeline/server.py):
 
+  GET  /health          version and build, so --start can replace a stale daemon
   GET  /events          drain queued events (JSON list); also the watchdog ping
   POST /say  {text,gen,filler?} queue a sentence; dropped if gen is older than current;
                         filler: a line said while the reply is not ready
   POST /flush {gen}     stop speaking, drop queued sentences older than gen
   POST /listen {on}     pause or resume the mic
+  POST /wake, /sleep    leave or enter the low-power wake-word wait
+  POST /log {line}      write a line from the mod into voiced.log
   POST /config {voice,speed}  change the voice or speaking rate (HTTP 400 if unknown)
   POST /shutdown        exit
   POST /claim {owner}   this session now owns voice; requests carrying another
                         session's X-Voice-Owner header get HTTP 409
 
 `voiced.py --voices` prints the voices as JSON; `voiced.py --check-voice NAME`
-exits 0 if NAME is a voice. Neither loads a model.
+exits 0 if NAME is a voice, 2 if it is one that needs downloading first
+(`--fetch-voice NAME` does that), 1 otherwise. None of these loads a model.
 
 `voiced.py --start` starts the daemon if no live one owns the socket, then exits.
 The daemon exits on its own when nothing polls /events for WATCHDOG_S seconds,

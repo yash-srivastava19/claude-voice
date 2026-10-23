@@ -1,6 +1,6 @@
 """Keeps text to speech out of speech to text's way. When both run (you talk over a
 reply), Kokoro at equal priority slows your transcription 0.50 s -> 0.93 s; at lower
-priority it stays 0.60 s (bench/contention.py). The reply is paused meanwhile, so the
+priority it stays 0.60 s (bench/run.py contention). The reply is paused meanwhile, so the
 slower synthesis is not heard.
 
 Linux sets priority per thread, so this lowers only the threads text to speech uses:
