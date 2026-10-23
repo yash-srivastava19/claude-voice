@@ -55,17 +55,23 @@ class Daemon:
         subprocess.run([str(VENV_PY), str(DAEMON), "--start"], env=env, check=True, capture_output=True)
         self.events()
 
-    def call(self, method, path, body=None):
+    def call(self, method, path, body=None, owner=None):
+        return self.request(method, path, body, owner)[1]
+
+    def request(self, method, path, body=None, owner=None):
+        """(HTTP status, JSON body); owner sends the X-Voice-Owner header a mod sends."""
         data = json.dumps(body or {}).encode()
+        header = f"X-Voice-Owner: {owner}\r\n" if owner else ""
         with socket.socket(socket.AF_UNIX) as s:
             s.settimeout(5)
             s.connect(str(self.sock))
-            s.sendall(f"{method} {path} HTTP/1.0\r\nContent-Length: {len(data)}\r\n\r\n".encode() + data)
+            s.sendall(f"{method} {path} HTTP/1.0\r\n{header}Content-Length: {len(data)}\r\n\r\n".encode() + data)
             reply = b""
             while chunk := s.recv(65536):
                 reply += chunk
         try:
-            return json.loads(reply.split(b"\r\n\r\n", 1)[1])
+            status = int(reply.split(b" ", 2)[1])
+            return status, json.loads(reply.split(b"\r\n\r\n", 1)[1])
         except (IndexError, ValueError):
             log = self.log.read_text()[-2000:] if self.log.exists() else "(no log)"
             raise AssertionError(f"{method} {path}: bad reply {reply[:300]!r}\n--- daemon log ---\n{log}")
@@ -158,3 +164,13 @@ def test_filler_plays_without_counting_as_the_reply(daemon):
     log = daemon.log.read_text()
     assert "(filler): 'Okay, let me think.'" in log  # one piece, tagged
     assert "first audio for gen" not in log
+
+
+def test_one_session_owns_voice(daemon):
+    daemon.call("POST", "/claim", {"owner": "session-a"})
+    daemon.call("POST", "/claim", {"owner": "session-b"})  # a later /talk start takes over
+    assert daemon.request("GET", "/events", owner="session-a")[0] == 409
+    assert daemon.request("GET", "/events", owner="session-b")[0] == 200
+    assert daemon.request("GET", "/events")[0] == 200  # tools and older mods send no owner
+    assert daemon.request("POST", "/shutdown", owner="session-a")[0] == 409  # a stale session can't stop it
+    assert daemon.request("GET", "/health")[0] == 200

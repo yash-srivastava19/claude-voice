@@ -11,6 +11,8 @@ and speaks text with Kokoro. The mod talks to it over HTTP on a Unix socket:
   POST /listen {on}     pause or resume the mic
   POST /config {voice,speed}  change the voice or speaking rate (HTTP 400 if unknown)
   POST /shutdown        exit
+  POST /claim {owner}   this session now owns voice; requests carrying another
+                        session's X-Voice-Owner header get HTTP 409
 
 `voiced.py --voices` prints the voices as JSON; `voiced.py --check-voice NAME`
 exits 0 if NAME is a voice. Neither loads a model.

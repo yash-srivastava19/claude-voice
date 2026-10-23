@@ -17,7 +17,8 @@ rsync -az --delete -e "$SSH" --exclude .git --exclude __pycache__ --exclude benc
 $SSH "$HOST" sh -s "$PROVIDER" <<'EOF'
 set -eu
 PROVIDER=$1
-command -v curl >/dev/null || sudo apt-get install -y -q curl
+# install.sh checks for the audio tools a user's machine has; a server needs them added.
+command -v arecord >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q curl alsa-utils; } >/dev/null
 cd ~/claude-voice
 sh install.sh
 PY=~/.local/share/voice-mode/venv/bin/python

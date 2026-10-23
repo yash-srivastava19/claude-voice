@@ -35,6 +35,9 @@ class VoiceTask:
         self.events, self.events_lock = [], threading.Lock()
         self.last_poll = self.last_activity = time.monotonic()
         self.listening, self.awake = True, True
+        # The session whose /talk start came last. One daemon serves one session: two
+        # sessions polling would split the person's words between them.
+        self.owner = None
         self.can_sleep = wake_stt is not None
         self.echo = echo
         self.speech_out = SpeechOut(tts, player, self.emit, self.touch, self.stopping)
@@ -44,6 +47,15 @@ class VoiceTask:
         return (*self.speech_in.threads(), *self.speech_out.threads(), self.watchdog_loop)
 
     # what the harness can ask (pipeline/server.py maps these to endpoints) ---
+
+    def claim(self, owner):
+        if owner != self.owner:
+            log(f"owner: {owner} (was {self.owner})")
+            self.owner = owner
+
+    def serves(self, owner):
+        """A request is served if it names no owner (tools, older mods) or the current one."""
+        return owner is None or self.owner is None or owner == self.owner
 
     def status(self):
         return {"speaking": self.speech_out.speaking, "listening": self.listening, "gen": self.speech_out.gen,

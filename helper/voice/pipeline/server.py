@@ -39,7 +39,16 @@ def make_handler(d):
             except BrokenPipeError:  # the health check hangs up once it has read enough
                 pass
 
+        def foreign(self):
+            """Answers 409 for a session that no longer owns voice; True if it did."""
+            if d.serves(self.headers.get("X-Voice-Owner")):
+                return False
+            self.reply({"error": "voice moved to another session"}, 409)
+            return True
+
         def do_GET(self):
+            if self.path != "/health" and self.foreign():
+                return
             if self.path == "/events":
                 self.reply({"events": d.drain(), **d.status()})
             elif self.path == "/health":
@@ -52,6 +61,12 @@ def make_handler(d):
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
+            if self.path == "/claim":
+                d.claim(str(body.get("owner") or "") or None)
+                self.reply({"ok": True, "gen": d.status()["gen"]})
+                return
+            if self.foreign():
+                return
             if self.path == "/say":
                 d.say(str(body.get("text", "")), int(body.get("gen", 0)), bool(body.get("filler", False)))
             elif self.path == "/config":

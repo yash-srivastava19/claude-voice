@@ -69,6 +69,8 @@ Examples of the style:
 // resumes from $.state.
 const v = {
   socket: '',
+  // This session's id: the daemon serves the session that claimed it last.
+  owner: '',
   // How the daemon keeps its own voice out of the mic: aec, gate or open (see voiced.py).
   echo: '',
   poller: undefined as { cancel: () => void } | undefined,
@@ -108,13 +110,19 @@ const v = {
   settings: { voice: 'michael', speed: 1.05, fillers: true },
 }
 
+// Another session's /talk start took voice over; this one turns voice off, quietly.
+class MovedAway extends Error {
+  constructor() { super('voice moved to another session') }
+}
+
 async function call($: EngineInterface, method: 'GET' | 'POST', path: string, body?: object) {
   const res = await $.http.fetch(`http://voice${path}`, {
     method,
     socketPath: v.socket,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(v.owner ? { 'X-Voice-Owner': v.owner } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   })
+  if (res.status === 409) throw new MovedAway()
   if (!res.ok) {
     const why = (() => { try { return JSON.parse(res.text).error } catch { return undefined } })()
     throw new Error(why ?? `voice daemon ${path}: HTTP ${res.status}`)
@@ -164,6 +172,8 @@ async function startDaemon($: EngineInterface) {
   const { exitCode, stdout, stderr } = await daemonScript($, ['--start'])
   if (exitCode !== 0) throw new Error(stderr.trim() || `voice daemon exited ${exitCode}`)
   v.socket = JSON.parse(stdout.trim().split('\n').pop() ?? '{}').socket
+  v.owner = await $.session.id()
+  await call($, 'POST', '/claim', { owner: v.owner })
   v.echo = (await call($, 'GET', '/health').catch(() => ({}))).echo ?? ''
   await call($, 'POST', '/config', v.settings).catch(err =>
     $.ui.toast(`voice: ${(err as Error).message}; keeping the previous voice`))
@@ -338,7 +348,12 @@ async function poll($: EngineInterface) {
       }
     }
     await fill($)
-  } catch {
+  } catch (err) {
+    if (err instanceof MovedAway) {
+      await stop($, { keepDaemon: true })
+      $.ui.toast('Voice mode is on in another session now, so it is off here. /talk start takes it back.')
+      return
+    }
     v.failures += 1
     if (v.failures === 8) {
       // ~2 s without the daemon: it died or was shut down; bring it back once.
@@ -365,7 +380,8 @@ async function start($: EngineInterface) {
   v.poller = $.clock.every(POLL_MS, () => void poll($))
 }
 
-async function stop($: EngineInterface) {
+// keepDaemon: another session owns the daemon now; leave it running for them.
+async function stop($: EngineInterface, { keepDaemon = false } = {}) {
   v.poller?.cancel()
   v.poller = undefined
   v.submitTimer?.cancel()
@@ -373,7 +389,7 @@ async function stop($: EngineInterface) {
   await update($, isActive, () => false)
   await update($, phase, () => 'off')
   await update($, heard, () => '')
-  if (v.socket) await call($, 'POST', '/shutdown').catch(() => {})
+  if (v.socket && !keepDaemon) await call($, 'POST', '/shutdown').catch(() => {})
 }
 
 // Saves one of the plugin's settings the way the /config menu would.
