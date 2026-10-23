@@ -68,7 +68,7 @@ class TTSSwitcher:
         self.speed = speed
         try:
             self._use(voice)
-        except ValueError as err:
+        except Exception as err:  # a voice that can't load must not keep the daemon down
             log(f"voice {voice!r}: {err}; using {fallback}")
             self._use(fallback)
 

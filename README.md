@@ -44,8 +44,9 @@ first (`brew install python@3.13`, or your distro's package) saves a 70 MB downl
 - Just talk.
 - To cut a reply short: say "stop" (on speakers, only once the mic is listening; see
   below), press **Hush** in the voice band, or run `/talk hush`.
-- While Claude works it says what it is doing ("Searching the web."), so a long
-  pause never sounds like a dropped call. `/talk fillers off` turns that off.
+- When a turn goes quiet, Claude fills the pause the way a person would ("Mm, one
+  sec.", "Searching the web."), so it never sounds like a dropped call.
+  `/talk fillers off` turns that off.
 - After 2 minutes of quiet it sleeps; say "hey Claude" to wake it.
 - Voice follows one Claude Code session at a time. `/talk start` in another
   session moves it there, and the first session goes quiet.
@@ -100,8 +101,8 @@ The next `/talk start` uses it. Delete the file and restart PipeWire to undo.
 Built in: heart, bella, nicole, scarlet, emma, michael, fenrir, puck, george, fable, plus
 the mixes honey and velvet. Any of Kokoro's English voices works by its id too.
 
-ryan and lessac are Piper voices: plainer, but about five times faster, for an older
-or busy machine. Each downloads (about 80 MB) the first time you pick it.
+ryan and lessac are Piper voices: plainer, but about six times faster, for an older
+or busy machine. Each downloads (about 70 MB) the first time you pick it.
 
 Your choice is saved; it is also under `/config`.
 

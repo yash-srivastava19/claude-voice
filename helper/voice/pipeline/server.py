@@ -76,7 +76,7 @@ def make_handler(d):
             elif self.path == "/config":
                 try:
                     d.configure_voice(body.get("voice"), body.get("speed"))
-                except (ValueError, OSError) as err:
+                except Exception as err:  # an engine's own load error, whatever its type
                     self.reply({"error": str(err)}, 400)
                     return
             elif self.path == "/flush":
@@ -105,7 +105,10 @@ def request(method, path) -> bytes:
         s.settimeout(1)
         s.connect(str(SOCK))
         s.sendall(f"{method} {path} HTTP/1.0\r\nContent-Length: 0\r\n\r\n".encode())
-        return s.recv(4096)
+        reply = b""
+        while chunk := s.recv(4096):  # headers and body arrive in separate writes
+            reply += chunk
+        return reply
 
 
 def running_version():

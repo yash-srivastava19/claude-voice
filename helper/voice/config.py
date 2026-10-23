@@ -29,7 +29,9 @@ BUILD = _build()
 # whisper on CPU), whisper otherwise. VOICE_STT forces one (see services/stt_service.py).
 PARAKEET_MODEL = os.environ.get("VOICE_PARAKEET_MODEL", str(MODELS / "parakeet-tdt-0.6b-v2-int8"))
 WHISPER_MODEL = os.environ.get("VOICE_WHISPER_MODEL", str(MODELS / "ggml-base.en.bin"))
-STT_ENGINE = os.environ.get("VOICE_STT", "") or ("parakeet" if Path(PARAKEET_MODEL).is_dir() else "whisper")
+# Someone who set VOICE_WHISPER_MODEL (before Parakeet existed) chose whisper.
+STT_ENGINE = (os.environ.get("VOICE_STT", "")
+              or ("whisper" if "VOICE_WHISPER_MODEL" in os.environ or not Path(PARAKEET_MODEL).is_dir() else "parakeet"))
 # The small model that listens for "hey Claude" while asleep.
 WAKE_MODEL = os.environ.get("VOICE_WAKE_MODEL", str(MODELS / "ggml-tiny.en.bin"))
 

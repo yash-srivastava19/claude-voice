@@ -30,6 +30,8 @@ def _decimal(m):
 
 
 def _unit(m):
+    if m.group(2) == "s" and re.fullmatch(r"(1[89]|20)\d0", m.group(1)):
+        return m.group(0)  # the 1990s is a decade, not 1990 seconds
     return f"{m.group(1)} {UNITS[m.group(2).lower()]}"
 
 

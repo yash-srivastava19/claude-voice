@@ -23,12 +23,19 @@ SETUP=2
 # would install, so an older install can catch up with --background without making
 # anyone wait at /talk start.
 if [ "${1:-}" = "--check" ]; then [ "$(cat "$V/.installed" 2>/dev/null)" = "$SETUP" ]; exit; fi
+# Whisper users (VOICE_STT=whisper, or a VOICE_WHISPER_MODEL of their own) skip Parakeet.
+uses_whisper() { [ "${VOICE_STT:-}" = whisper ] || [ -n "${VOICE_WHISPER_MODEL:-}" ]; }
 if [ "${1:-}" = "--complete" ]; then
-  [ -d "$V/models/parakeet-tdt-0.6b-v2-int8" ] && "$V/venv/bin/python" -c "import sherpa_onnx" 2>/dev/null; exit
+  uses_whisper || [ -d "$V/models/parakeet-tdt-0.6b-v2-int8" ] || exit 1
+  "$V/venv/bin/python" -c "import sherpa_onnx" 2>/dev/null; exit
 fi
+# --background: exits 0 when it started a catch-up, 3 when one is already running.
 if [ "${1:-}" = "--background" ]; then
-  mkdir "$V/.upgrading" 2>/dev/null || exit 0  # one at a time
-  (trap 'rmdir "$V/.upgrading"' EXIT; nohup sh "$0" >> "$V/install.log" 2>&1) </dev/null >/dev/null 2>&1 &
+  lock="$V/.upgrading.pid"
+  if [ -f "$lock" ] && kill -0 "$(cat "$lock")" 2>/dev/null; then exit 3; fi
+  detach=$(command -v setsid || true)  # outlive the session that started it
+  $detach nohup sh -c 'echo $$ > "$1"; sh "$2" >> "$3/install.log" 2>&1; rm -f "$1"' sh "$lock" "$0" "$V" \
+    </dev/null >/dev/null 2>&1 &
   exit 0
 fi
 
@@ -108,7 +115,7 @@ K=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
 W=https://huggingface.co/ggerganov/whisper.cpp/resolve/main
 get kokoro-v1.0.onnx  "$K/kokoro-v1.0.onnx"
 get voices-v1.0.bin   "$K/voices-v1.0.bin"
-[ "${VOICE_STT:-}" = whisper ] && get ggml-base.en.bin "$W/ggml-base.en.bin"
+[ "${VOICE_STT:-}" = whisper ] && [ -z "${VOICE_WHISPER_MODEL:-}" ] && get ggml-base.en.bin "$W/ggml-base.en.bin"
 get ggml-tiny.en.bin  "$W/ggml-tiny.en.bin"
 get silero_vad.onnx   https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx
 
@@ -121,7 +128,7 @@ unpack() {  # unpack <folder under models/> <url of a .tar.bz2 holding one folde
   mv "$V/models/.unpack/"* "$V/models/$1" && rm -rf "$V/models/.unpack" "$V/models/$name"
 }
 R=https://github.com/k2-fsa/sherpa-onnx/releases/download
-unpack parakeet-tdt-0.6b-v2-int8 "$R/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2"
+uses_whisper || unpack parakeet-tdt-0.6b-v2-int8 "$R/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2"
 # Piper voices (ryan, lessac) are fetched the first time one is picked: voiced.py --fetch-voice.
 
 echo "$SETUP" > "$V/.installed"

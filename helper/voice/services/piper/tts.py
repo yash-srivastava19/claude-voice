@@ -31,11 +31,11 @@ def _folder(ref) -> Path:
 class PiperTTS:
     @staticmethod
     def check(ref):
-        _folder(ref)
         import importlib.util
-        if importlib.util.find_spec("sherpa_onnx") is None:
+        if importlib.util.find_spec("sherpa_onnx") is None:  # before the folder, so nothing downloads in vain
             raise ValueError("Piper voices need the updated install, which downloads in the background "
                              "after /talk start; try again in a few minutes")
+        _folder(ref)
 
     def __init__(self, threads: int | None = None, provider: str = "cpu"):
         self.threads = threads or 2  # leaves the cores to speech to text; still 4x faster than real time

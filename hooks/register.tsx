@@ -153,7 +153,8 @@ async function ensureInstalled($: EngineInterface) {
 async function catchUpInBackground($: EngineInterface) {
   const done = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--complete'])
   if (done.exitCode === 0) return
-  await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--background'])
+  const started = await $.process.run(['sh', `${$.plugin.root}/install.sh`, '--background'])
+  if (started.exitCode !== 0) return // one is already running, from an earlier /talk start
   $.ui.toast('Voice: downloading a more accurate speech model in the background (about 600 MB). It is used from the next /talk start.', { timeoutMs: 15_000 })
   modLog($, 'install incomplete: catching up in the background')
 }
@@ -553,9 +554,11 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (!v.runningTurn) v.runningTurn = e.turnId // turn.start carries no agentId; keep the main turn
     v.hasSpokenThisTurn = false
-    v.turnStartedAt = v.lastSpokeAt = await $.clock.now()
-    v.said = { thinking: false, toolLines: 0, stillWorking: 0 }
-    v.turns += 1
+    if (e.turnId === v.runningTurn) { // a subagent's turn must not restart the fillers
+      v.turnStartedAt = v.lastSpokeAt = await $.clock.now()
+      v.said = { thinking: false, toolLines: 0, stillWorking: 0 }
+      v.turns += 1
+    }
     if (await read($, isActive)) {
       modLog($, `turn start ${e.turnId}`)
       await update($, phase, () => 'thinking')

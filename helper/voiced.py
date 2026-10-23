@@ -68,7 +68,7 @@ def start_detached() -> int:
         )
     for _ in range(250):  # Kokoro takes a few seconds to load and warm up
         time.sleep(0.1)
-        if alive():
+        if running_version() == f"{VERSION}+{BUILD}":  # not an old daemon still exiting
             print(json.dumps({"status": "started", "socket": str(SOCK)}))
             return 0
     print(f"daemon did not come up; see {LOG}", file=sys.stderr)

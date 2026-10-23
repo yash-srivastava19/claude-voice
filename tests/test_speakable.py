@@ -8,6 +8,7 @@ from voice.processors.speakable import speakable
     ("It took 0.8 s.", "It took 0 point eight seconds."),
     ("about 0.36s for 2.3s of audio", "about 0 point three six seconds for 2 point three seconds of audio"),
     ("It's 4x faster.", "It's 4 times faster."),
+    ("music from the 1990s", "music from the 1990s"),
     ("Errors fell 26% to 10.5%.", "Errors fell 26 percent to 10 point five percent."),
     ("It uses 1182 MB.", "It uses 1182 megabytes."),
     ("Upgrade to v0.2.4 first.", "Upgrade to version 0 point 2 point 4 first."),
