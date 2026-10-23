@@ -2,7 +2,6 @@
 tarball unpacks it (model .onnx, tokens.txt, espeak-ng-data/), or the name of one in
 MODELS/piper/. Each voice is its own model, loaded on first use and kept."""
 
-import os
 import threading
 from pathlib import Path
 
@@ -26,7 +25,7 @@ class PiperTTS:
         _folder(ref)
 
     def __init__(self, threads: int | None = None):
-        self.threads = threads or min(4, os.cpu_count() or 4)
+        self.threads = threads or 2  # leaves the cores to speech to text; still 4x faster than real time
         self.models = {}
         self.lock = threading.Lock()
 

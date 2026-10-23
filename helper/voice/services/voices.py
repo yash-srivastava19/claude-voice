@@ -41,6 +41,9 @@ PRESETS = [
     VoiceSpec("fable", "kokoro", "bm_fable", "storyteller, British male"),
     VoiceSpec("honey", "kokoro", "af_heart:0.6+af_bella:0.4", "mix of heart and bella"),
     VoiceSpec("velvet", "kokoro", "af_nicole:0.5+af_heart:0.5", "mix of nicole and heart"),
+    # Piper: plainer than Kokoro, but about six times faster, so replies never stutter.
+    VoiceSpec("ryan", "piper", "ryan-medium", "clear, US male (Piper, fastest)"),
+    VoiceSpec("lessac", "piper", "lessac-medium", "clear, US female (Piper, fastest)"),
 ]
 BY_NAME = {v.name: v for v in PRESETS}
 

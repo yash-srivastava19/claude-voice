@@ -41,13 +41,11 @@ def make_handler(d):
 
         def do_GET(self):
             if self.path == "/events":
-                self.reply({"events": d.drain(), "speaking": d.out.speaking,
-                            "listening": d.listening, "gen": d.out.gen, "awake": d.awake,
-                            "echo": d.echo})
+                self.reply({"events": d.drain(), **d.status()})
             elif self.path == "/health":
                 self.reply({"ok": True, "pid": os.getpid(), "version": VERSION, "echo": d.echo})
             elif self.path == "/config":
-                self.reply({"voice": d.out.tts.voice.name, "speed": d.out.tts.speed})
+                self.reply(d.voice())
             else:
                 self.send_error(404)
 
@@ -55,15 +53,16 @@ def make_handler(d):
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
             if self.path == "/say":
-                d.out.say(str(body.get("text", "")), int(body.get("gen", 0)))
+                d.say(str(body.get("text", "")), int(body.get("gen", 0)))
             elif self.path == "/config":
                 try:
-                    d.out.tts.configure(body.get("voice"), body.get("speed"))
+                    d.configure_voice(body.get("voice"), body.get("speed"))
                 except (ValueError, OSError) as err:
                     self.reply({"error": str(err)}, 400)
                     return
             elif self.path == "/flush":
-                d.out.flush(int(body.get("gen", d.out.gen + 1)), str(body.get("why", "mod")))
+                gen = body.get("gen")
+                d.flush(None if gen is None else int(gen), str(body.get("why", "mod")))
             elif self.path == "/wake":
                 d.wake(str(body.get("why", "mod")))
             elif self.path == "/sleep":
@@ -77,7 +76,7 @@ def make_handler(d):
             else:
                 self.send_error(404)
                 return
-            self.reply({"ok": True, "gen": d.out.gen})
+            self.reply({"ok": True, "gen": d.status()["gen"]})
 
     return Handler
 

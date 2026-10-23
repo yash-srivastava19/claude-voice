@@ -29,8 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from voice.config import (KOKORO_SPEED, KOKORO_VOICE, LOG, SLEEP_AFTER_S, SOCK, VERSION,  # noqa: E402
-                          WAKE_MODEL, WHISPER_MODEL)
+from voice.config import (KOKORO_SPEED, KOKORO_VOICE, LOG, PARAKEET_MODEL, SLEEP_AFTER_S, SOCK,  # noqa: E402
+                          STT_ENGINE, VERSION, WAKE_MODEL, WHISPER_MODEL)
 from voice.log import log  # noqa: E402
 from voice.pipeline.server import UnixHTTPServer, alive, make_handler, request, running_version  # noqa: E402
 from voice.power import hold_power, release_power  # noqa: E402
@@ -73,9 +73,9 @@ def build():
     from voice.services import stt_service, tts_service
     from voice.transports.local.audio import Mic, Player, pick_devices
 
-    tts = tts_service.Speaker(KOKORO_VOICE, KOKORO_SPEED)
+    tts = tts_service.TTSSwitcher(KOKORO_VOICE, KOKORO_SPEED)
     log("tts:", f"{tts.voice.engine} ({tts.voice.name}, speed {tts.speed})")
-    stt = stt_service.create("whisper", model=WHISPER_MODEL, language="en")
+    stt = make_stt(stt_service)
     wake_stt = make_wake_stt(stt_service)
     source, sink, aec = pick_devices()
     echo = echo_mode(aec)
@@ -83,6 +83,19 @@ def build():
         + (" (mic paused while speaking: no echo cancellation)" if echo == "gate" else ""))
     return VoiceTask(stt=stt, tts=tts, vad=SileroVAD(), mic=Mic(source), player=Player(sink),
                      echo=echo, wake_stt=wake_stt)
+
+
+def make_stt(stt_service):
+    """The configured speech-to-text engine, falling back to whisper if it can't load."""
+    if STT_ENGINE != "whisper":
+        try:
+            stt = stt_service.create(STT_ENGINE, model=PARAKEET_MODEL if STT_ENGINE == "parakeet" else None)
+            log(f"stt: {STT_ENGINE} ({PARAKEET_MODEL if STT_ENGINE == 'parakeet' else ''})")
+            return stt
+        except Exception as err:
+            log(f"stt: {STT_ENGINE} unavailable ({err!r}); using whisper")
+    log(f"stt: whisper ({WHISPER_MODEL})")
+    return stt_service.create("whisper", model=WHISPER_MODEL, language="en")
 
 
 def make_wake_stt(stt_service):
@@ -132,7 +145,7 @@ def main():
     log("ready on", SOCK)
 
     d.stopping.wait()
-    d.out.stop()
+    d.stop()
     release_power()
     server.shutdown()
     SOCK.unlink(missing_ok=True)

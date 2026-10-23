@@ -64,7 +64,11 @@ class Daemon:
             reply = b""
             while chunk := s.recv(65536):
                 reply += chunk
-        return json.loads(reply.split(b"\r\n\r\n", 1)[1])
+        try:
+            return json.loads(reply.split(b"\r\n\r\n", 1)[1])
+        except (IndexError, ValueError):
+            log = self.log.read_text()[-2000:] if self.log.exists() else "(no log)"
+            raise AssertionError(f"{method} {path}: bad reply {reply[:300]!r}\n--- daemon log ---\n{log}")
 
     def events(self):
         return self.call("GET", "/events")["events"]

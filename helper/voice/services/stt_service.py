@@ -10,7 +10,9 @@ To add an engine: write services/<engine>/stt.py with a class meeting STTService
 and add a line to ENGINES. Nothing else changes.
 """
 
-from typing import Callable, Protocol
+from typing import Protocol
+
+from voice.services.registry import load
 
 
 class STTService(Protocol):
@@ -19,28 +21,12 @@ class STTService(Protocol):
     def transcribe(self, audio) -> str: ...
 
 
-def _whisper(**opts) -> STTService:
-    from voice.services.whisper.stt import WhisperSTT
-    return WhisperSTT(**opts)
-
-
-def _sherpa(kind):
-    def make(**opts) -> STTService:
-        from voice.services.sherpa.stt import SherpaSTT
-        return SherpaSTT(kind, **opts)
-    return make
-
-
-ENGINES: dict[str, Callable[..., STTService]] = {
-    "whisper": _whisper,
-    "moonshine": _sherpa("moonshine"),
-    "parakeet": _sherpa("parakeet"),
+ENGINES = {
+    "whisper": ("voice.services.whisper.stt", "WhisperSTT"),
+    "moonshine": ("voice.services.sherpa.stt", "MoonshineSTT"),
+    "parakeet": ("voice.services.sherpa.stt", "ParakeetSTT"),
 }
 
 
 def create(name: str, **opts) -> STTService:
-    try:
-        factory = ENGINES[name]
-    except KeyError:
-        raise ValueError(f"no speech-to-text engine {name!r}; one of {', '.join(ENGINES)}") from None
-    return factory(**opts)
+    return load(ENGINES, "speech-to-text", name)(**opts)

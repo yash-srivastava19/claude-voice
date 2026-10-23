@@ -99,7 +99,7 @@ class SpeechIn:
     def _mic_lost(self):
         self.session.emit("mic", ok=False)
         if self.turns.in_speech and self.session.awake:
-            self.session.emit("dropped", reason="mic")
+            self._drop("mic")
         self.vad.reset()
         self.turns.reset()
 
@@ -116,11 +116,11 @@ class SpeechIn:
             text = self._transcript(audio, started, ended, strip_wake_phrase)
         except Exception as err:  # every `hearing` must end in an utterance or a drop
             log("transcribe error:", repr(err))
-            self.session.emit("dropped", reason="error")
+            self._drop("error")
             text = ""
         if barged and text and is_backchannel(text):
             log(f"backchannel while speaking, not a barge-in: {text!r}")
-            self.session.emit("dropped", reason="backchannel")
+            self._drop("backchannel")
             text = ""
         if barged:
             self._settle_barge_in(text)
@@ -142,11 +142,13 @@ class SpeechIn:
         """The transcript to deliver, or "" after emitting why it was dropped."""
         speech_s = seconds(audio)
         if speech_s < 0.4:
-            self.session.emit("dropped", reason="short")
+            self._drop("short")
             return ""
         t = time.monotonic()
-        text = clean_transcript(self.stt.transcribe(to_float(audio)))
-        log(f"stt {time.monotonic() - t:.2f}s for {speech_s:.1f}s audio: {text!r}")
+        raw = self.stt.transcribe(to_float(audio))
+        text = clean_transcript(raw)
+        log(f"stt {time.monotonic() - t:.2f}s for {speech_s:.1f}s audio: {text!r}"
+            + (f" (heard {raw!r})" if raw.strip() != text else ""))
         is_wake, rest = strip_wake(text)
         # Awake, "hey Claude, ..." loses its greeting; a sentence that merely starts
         # with "Cloud ..." keeps every word.
@@ -154,12 +156,15 @@ class SpeechIn:
         if is_wake and (strip_wake_phrase or greeted):
             text = clean_transcript(rest)
         if text and is_echo(text, self.out.playing_between(started, ended, ECHO_TAIL_S)):
-            log("dropped as echo of our own speech")
-            self.session.emit("dropped", reason="echo")
+            self._drop("echo")
             return ""
         if not text:
-            self.session.emit("dropped", reason="empty")
+            self._drop("empty")
         return text
+
+    def _drop(self, reason):
+        log(f"dropped: {reason}")
+        self.session.emit("dropped", reason=reason)
 
     # asleep ------------------------------------------------------------------
 

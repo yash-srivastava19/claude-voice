@@ -37,11 +37,34 @@ class VoiceTask:
         self.listening, self.awake = True, True
         self.can_sleep = wake_stt is not None
         self.echo = echo
-        self.out = SpeechOut(tts, player, self.emit, self.touch, self.stopping)
-        self.into = SpeechIn(stt=stt, vad=vad, mic=mic, out=self.out, session=self, echo=echo, wake_stt=wake_stt)
+        self.speech_out = SpeechOut(tts, player, self.emit, self.touch, self.stopping)
+        self.speech_in = SpeechIn(stt=stt, vad=vad, mic=mic, out=self.speech_out, session=self, echo=echo, wake_stt=wake_stt)
 
     def threads(self):
-        return (*self.into.threads(), *self.out.threads(), self.watchdog_loop)
+        return (*self.speech_in.threads(), *self.speech_out.threads(), self.watchdog_loop)
+
+    # what the harness can ask (pipeline/server.py maps these to endpoints) ---
+
+    def status(self):
+        return {"speaking": self.speech_out.speaking, "listening": self.listening, "gen": self.speech_out.gen,
+                "awake": self.awake, "echo": self.echo}
+
+    def say(self, text, gen):
+        self.speech_out.say(text, gen)
+
+    def flush(self, gen=None, why="mod"):
+        self.speech_out.flush(self.speech_out.gen + 1 if gen is None else gen, why)
+
+    def voice(self):
+        tts = self.speech_out.tts
+        return {"voice": tts.voice.name, "speed": tts.speed}
+
+    def configure_voice(self, voice=None, speed=None):
+        """Raises ValueError for a voice or speed that can't be used."""
+        self.speech_out.tts.configure(voice, speed)
+
+    def stop(self):
+        self.speech_out.stop()
 
     # events for the harness ------------------------------------------------
 
@@ -83,5 +106,5 @@ class VoiceTask:
                 log("no poll for", WATCHDOG_S, "s; exiting")
                 self.stopping.set()
             quiet = time.monotonic() - self.last_activity
-            if self.awake and not self.out.speaking and self.out.idle() and quiet > SLEEP_AFTER_S > 0:
+            if self.awake and not self.speech_out.speaking and self.speech_out.idle() and quiet > SLEEP_AFTER_S > 0:
                 self.sleep(f"{quiet:.0f}s quiet")

@@ -13,8 +13,12 @@ IS_MAC = sys.platform == "darwin"
 # Bumped with each release: `--start` replaces a running daemon of another version.
 VERSION = "0.2.3"
 
-# Speech to text, and the small model that listens for "hey Claude" while asleep.
+# Speech to text: Parakeet when its model is installed (most accurate, and faster than
+# whisper on CPU), whisper otherwise. VOICE_STT forces one (see services/stt_service.py).
+PARAKEET_MODEL = os.environ.get("VOICE_PARAKEET_MODEL", str(MODELS / "parakeet-tdt-0.6b-v2-int8"))
 WHISPER_MODEL = os.environ.get("VOICE_WHISPER_MODEL", str(MODELS / "ggml-base.en.bin"))
+STT_ENGINE = os.environ.get("VOICE_STT", "") or ("parakeet" if Path(PARAKEET_MODEL).is_dir() else "whisper")
+# The small model that listens for "hey Claude" while asleep.
 WAKE_MODEL = os.environ.get("VOICE_WAKE_MODEL", str(MODELS / "ggml-tiny.en.bin"))
 
 # Text to speech. The mod sends the voice and speed it is configured with (POST /config);

@@ -14,7 +14,8 @@ class SherpaSTT:
                  hotwords: list[str] | None = None, hotwords_score: float = 2.0):
         import sherpa_onnx as so
         d = Path(model)
-        threads = threads or min(8, os.cpu_count() or 4)
+        # 6 beat 8 on a 2P+8E laptop, alone (0.95 s vs 1.31 s) and with TTS running (bench/contention.py).
+        threads = threads or min(6, os.cpu_count() or 4)
         self.name = kind
         if kind == "moonshine":
             if (d / "encoder_model.ort").exists():  # the 2026 release
@@ -48,3 +49,13 @@ class SherpaSTT:
             s.accept_waveform(16000, audio)
             self.rec.decode_stream(s)
         return s.result.text.strip()
+
+
+class MoonshineSTT(SherpaSTT):
+    def __init__(self, **opts):
+        super().__init__("moonshine", **opts)
+
+
+class ParakeetSTT(SherpaSTT):
+    def __init__(self, **opts):
+        super().__init__("parakeet", **opts)
