@@ -29,8 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from voice.config import (KOKORO_SPEED, KOKORO_VOICE, LOG, PARAKEET_MODEL, SLEEP_AFTER_S, SOCK,  # noqa: E402
-                          STT_ENGINE, VERSION, WAKE_MODEL, WHISPER_MODEL)
+from voice.config import (BUILD, KOKORO_SPEED, KOKORO_VOICE, LOG, PARAKEET_MODEL, SLEEP_AFTER_S,  # noqa: E402
+                          SOCK, STT_ENGINE, VERSION, WAKE_MODEL, WHISPER_MODEL)
 from voice.log import log  # noqa: E402
 from voice.pipeline.server import UnixHTTPServer, alive, make_handler, request, running_version  # noqa: E402
 from voice.power import hold_power, release_power  # noqa: E402
@@ -39,10 +39,11 @@ from voice.services.voices import list_voices  # noqa: E402
 
 def start_detached() -> int:
     version = running_version()
-    if version == VERSION:
+    if version == f"{VERSION}+{BUILD}":
         print(json.dumps({"status": "running", "socket": str(SOCK)}))
         return 0
-    if version is not None:  # an older daemon from before an update: replace it
+    if version is not None:  # a daemon from before an update: replace it
+        log(f"replacing daemon {version or 'of an old version'} with {VERSION}+{BUILD}")
         try:
             request("POST", "/shutdown")
         except OSError:

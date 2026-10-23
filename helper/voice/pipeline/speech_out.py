@@ -138,6 +138,7 @@ class SpeechOut:
         start = max(now, self.player.until)
         entry = [start, start + seconds(pcm, rate), text]
         self.played = [e for e in self.played if now - e[1] < 30] + [entry]
+        log(f"play {seconds(pcm, rate):.2f}s from +{start - now:.2f}s: {text[:60]!r}")
         done = self.player.write(pcm, rate, lambda: gen < self.gen or self.stopping.is_set())
         if not done:
             entry[1] = time.monotonic()

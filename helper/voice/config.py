@@ -10,8 +10,20 @@ SOCK = Path(os.environ.get("VOICE_SOCK") or Path(os.environ.get("XDG_RUNTIME_DIR
 LOG = Path(os.environ.get("VOICE_LOG") or HOME / "voiced.log")  # tests point this elsewhere
 
 IS_MAC = sys.platform == "darwin"
-# Bumped with each release: `--start` replaces a running daemon of another version.
+# Bumped with each release. `--start` replaces a running daemon whose version or BUILD
+# differs, so an updated plugin never keeps talking to the old code.
 VERSION = "0.2.3"
+
+
+def _build():
+    import hashlib
+    h = hashlib.sha1()
+    for f in sorted(Path(__file__).resolve().parent.parent.rglob("*.py")):
+        h.update(f.read_bytes())
+    return h.hexdigest()[:8]
+
+
+BUILD = _build()
 
 # Speech to text: Parakeet when its model is installed (most accurate, and faster than
 # whisper on CPU), whisper otherwise. VOICE_STT forces one (see services/stt_service.py).

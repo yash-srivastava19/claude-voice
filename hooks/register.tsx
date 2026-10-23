@@ -504,6 +504,19 @@ export const register: Register = (on, options) => {
     speak(splitter.flush())
   })
 
+  // Tool runs are where a turn goes quiet; the log marks them so the gaps can be measured.
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId || !(await read($, isActive))) return next(e)
+    const what = 'description' in e && typeof e.description === 'string' ? `: ${e.description}` : ''
+    modLog($, `tool start ${e.tool}${what}`)
+    const started = await $.clock.now()
+    try {
+      return await next(e)
+    } finally {
+      modLog($, `tool end ${e.tool} (${((await $.clock.now()) - started) / 1000}s)`)
+    }
+  })
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId) return result

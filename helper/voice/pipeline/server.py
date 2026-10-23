@@ -6,7 +6,7 @@ import re
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from voice.config import SOCK, VERSION
+from voice.config import BUILD, SOCK, VERSION
 from voice.log import log
 
 
@@ -43,7 +43,7 @@ def make_handler(d):
             if self.path == "/events":
                 self.reply({"events": d.drain(), **d.status()})
             elif self.path == "/health":
-                self.reply({"ok": True, "pid": os.getpid(), "version": VERSION, "echo": d.echo})
+                self.reply({"ok": True, "pid": os.getpid(), "version": VERSION, "build": BUILD, "echo": d.echo})
             elif self.path == "/config":
                 self.reply(d.voice())
             else:
@@ -90,15 +90,16 @@ def request(method, path) -> bytes:
 
 
 def running_version():
-    """The live daemon's version ("" for one too old to say), or None if none is live."""
+    """The live daemon's "version+build" ("" for one too old to say), or None if none is live."""
     try:
         reply = request("GET", "/health")
     except OSError:
         return None
     if b'"ok": true' not in reply:
         return None
-    m = re.search(rb'"version": "([^"]*)"', reply)
-    return m.group(1).decode() if m else ""
+    version = re.search(rb'"version": "([^"]*)"', reply)
+    build = re.search(rb'"build": "([^"]*)"', reply)
+    return "+".join(m.group(1).decode() for m in (version, build) if m)
 
 
 def alive() -> bool:
