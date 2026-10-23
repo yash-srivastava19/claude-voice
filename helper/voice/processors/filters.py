@@ -118,10 +118,11 @@ def chunk_sentence(text: str) -> list[str]:
 def split_opener(text: str) -> list[str]:
     """A reply's first sentence, cut so the first sound comes sooner: its opening clause
     ("Sure," "Found it,") on its own when that is short, else clause-sized chunks.
-    The opener costs Kokoro 0.3 s against 1.1 s for the whole sentence (bench/first_audio.py)."""
+    The opener costs Kokoro 0.3 s against 1.1 s for the whole sentence (bench/first_audio.py).
+    The rest is chunked too: a 0.6 s opener can't cover 1.1 s of synthesis for a long rest."""
     head, sep, rest = text.partition(", ")
     if sep and len(head.split()) <= 6 and len(rest.split()) >= 3:
-        return [head + ",", rest]
+        return [head + ",", *chunk_sentence(rest)]
     return chunk_sentence(text)
 
 

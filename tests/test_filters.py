@@ -63,6 +63,8 @@ def test_clean_transcript(text, expected):
 @pytest.mark.parametrize("text,chunks", [
     ("Sure, the basics are simple.", ["Sure,", "the basics are simple."]),
     ("Found it, your website is a Jekyll site.", ["Found it,", "your website is a Jekyll site."]),
+    ("I searched, but most of the results are low quality blogs, so read the dates as unconfirmed.",
+     ["I searched,", "but most of the results are low quality blogs,", "so read the dates as unconfirmed."]),
     ("Yes, done.", ["Yes, done."]),  # too little after the comma to be worth a second piece
     ("Okay opening the voice log.", ["Okay opening the voice log."]),
     ("When the mic drops and comes back a few seconds later, it reconnects.",

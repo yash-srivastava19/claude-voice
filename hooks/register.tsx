@@ -8,7 +8,6 @@ import { SpeechSplitter } from './speech'
 const isActive = atom({ plugin: 'voice', key: 'isActive' } as const, false)
 const phase = atom({ plugin: 'voice', key: 'phase' } as const, 'off' as VoicePhase)
 const heard = atom({ plugin: 'voice', key: 'heard' } as const, '')
-const tick = atom({ plugin: 'voice', key: 'tick' } as const, 0)
 
 const COMMAND = 'talk'
 // The band above the prompt: one glyph, color and hint per phase, so listening,
@@ -18,12 +17,12 @@ const PHASE_LOOK: Record<VoicePhase, { glyph: string; color?: string; hint: stri
   starting: { glyph: '…', color: 'gray', hint: 'loading the voice models (first run downloads them)' },
   listening: { glyph: '●', color: 'green', hint: 'say something · "stop" interrupts' },
   hearing: { glyph: '◉', color: 'greenBright', hint: 'hearing you…' },
-  thinking: { glyph: '◐', color: 'yellow', hint: 'working on it · speak to add to this turn' },
+  // Claude Code draws its own spinner while a turn runs; a second one only clutters.
+  thinking: { glyph: '◆', color: 'yellow', hint: 'speak to add to this turn' },
   speaking: { glyph: '▶', color: 'cyan', hint: 'talk over me to interrupt' },
   asleep: { glyph: '☾', color: 'magenta', hint: 'say "hey Claude" or type' },
   nomic: { glyph: '✕', color: 'red', hint: 'mic lost · reconnecting' },
 }
-const SPINNER = ['◐', '◓', '◑', '◒']
 const POLL_MS = 250
 const KEEP_AWAKE_MS = 20_000
 // Once no speech segment is open, wait this long before submitting. Segments
@@ -101,7 +100,8 @@ const v = {
   turnStartedAt: undefined as number | undefined,
   lastSpokeAt: 0,
   now: 0, // the clock at the last poll
-  tool: undefined as { startedAt: number; description: string } | undefined,
+  tool: undefined as { startedAt: number; name: string; description?: string } | undefined,
+  turns: 0,
   said: { thinking: false, toolLines: 0, stillWorking: 0 } as Said,
   // The daemon sleeps after a quiet spell; a running turn keeps it awake.
   lastKeepAwake: 0,
@@ -210,6 +210,7 @@ async function fill($: EngineInterface) {
     lastSpokeAt: v.lastSpokeAt,
     repliedThisTurn: v.hasSpokenThisTurn,
     tool: v.tool,
+    turnNumber: v.turns,
     canSpeak: !v.isHushedTurn && !v.muteUntilNextStep && v.openSegments === 0 && (now === 'thinking' || now === 'speaking'),
   }, v.said)
   if (!line) return
@@ -305,7 +306,6 @@ async function poll($: EngineInterface) {
   v.isPolling = true
   try {
     v.now = await $.clock.now()
-    if ((await read($, phase)) === 'thinking') await update($, tick, n => n + 1)
     const { events, gen } = await call($, 'GET', '/events')
     v.failures = 0
     syncGen(gen)
@@ -555,6 +555,7 @@ export const register: Register = (on, options) => {
     v.hasSpokenThisTurn = false
     v.turnStartedAt = v.lastSpokeAt = await $.clock.now()
     v.said = { thinking: false, toolLines: 0, stillWorking: 0 }
+    v.turns += 1
     if (await read($, isActive)) {
       modLog($, `turn start ${e.turnId}`)
       await update($, phase, () => 'thinking')
@@ -586,7 +587,7 @@ export const register: Register = (on, options) => {
     const what = 'description' in e && typeof e.description === 'string' ? `: ${e.description}` : ''
     modLog($, `tool start ${e.tool}${what}`)
     const started = await $.clock.now()
-    v.tool = { startedAt: started, description: what.slice(2) || e.tool }
+    v.tool = { startedAt: started, name: e.tool, description: what.slice(2) || undefined }
     try {
       return await next(e)
     } finally {
@@ -622,17 +623,14 @@ export const register: Register = (on, options) => {
     const now = await read($, phase)
     const last = await read($, heard)
     const look = PHASE_LOOK[now]
-    const glyph = now === 'thinking' ? SPINNER[(await read($, tick)) % SPINNER.length] : look.glyph
-    const room = Math.max(10, e.props.bodyColumns - 50)
-    const quote = last.length > room ? `${last.slice(0, room - 1)}…` : last
-    const hint = now === 'thinking' && quote ? `"${quote}" · speak to add to this turn`
+    const hint = now === 'thinking' && last ? `"${last}"`
       : now === 'speaking' && v.echo === 'gate' ? 'mic paused while I speak · Hush or send a message to interrupt'
       : look.hint
 
     return (
       <Box>
-        <Text color={look.color} bold>{`${glyph} ${now.padEnd(9)}`}</Text>
-        <Text dimColor>{`  ${hint}  `}</Text>
+        <Text color={look.color} bold>{`${look.glyph} ${now.padEnd(9)}`}</Text>
+        <Box flexShrink={1}><Text dimColor wrap="truncate-end">{`  ${hint}  `}</Text></Box>
         {now === 'speaking' && <Button key="voice-hush" label="Hush" plain onPress={() => hushTurn($, 'hush button')} />}
         <Button key="voice-stop" label="Stop voice" plain onPress={() => void stop($)} />
       </Box>

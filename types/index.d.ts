@@ -7,7 +7,6 @@ declare module 'claude-code' {
       phase: VoicePhase
       heard: string
       /** Advances while thinking, to animate the spinner. */
-      tick: number
     }
   }
 }
