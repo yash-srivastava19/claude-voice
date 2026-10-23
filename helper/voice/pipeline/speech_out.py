@@ -14,6 +14,7 @@ import time
 from voice.frames import seconds
 from voice.log import log
 from voice.processors.filters import chunk_sentence
+from voice.processors.speakable import speakable
 
 
 class SpeechOut:
@@ -41,6 +42,7 @@ class SpeechOut:
             log(f"say dropped: gen {gen} < {self.gen}")
             return
         self.touch()
+        text = speakable(text)  # "0.8 s" -> "0 point eight seconds", before anything is voiced
         # Clause-sized pieces each get their own intonation, which sounds choppy; only the
         # first sentence of a reply is split, so the first sound comes sooner.
         chunks = chunk_sentence(text) if gen != self.chunked_gen else [text]
