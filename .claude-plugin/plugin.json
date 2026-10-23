@@ -20,6 +20,12 @@
       "default": 1.05,
       "min": 0.5,
       "max": 2.0
+    },
+    "fillers": {
+      "type": "boolean",
+      "title": "Fillers",
+      "description": "Say a short line (\"let me think\", \"running the tests\") when a turn goes quiet",
+      "default": true
     }
   }
 }

@@ -53,7 +53,7 @@ def make_handler(d):
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
             if self.path == "/say":
-                d.say(str(body.get("text", "")), int(body.get("gen", 0)))
+                d.say(str(body.get("text", "")), int(body.get("gen", 0)), bool(body.get("filler", False)))
             elif self.path == "/config":
                 try:
                     d.configure_voice(body.get("voice"), body.get("speed"))

@@ -5,7 +5,8 @@ Listens on the mic, detects turns with Silero VAD, transcribes with whisper.cpp,
 and speaks text with Kokoro. The mod talks to it over HTTP on a Unix socket:
 
   GET  /events          drain queued events (JSON list); also the watchdog ping
-  POST /say  {text,gen} queue a sentence; dropped if gen is older than current
+  POST /say  {text,gen,filler?} queue a sentence; dropped if gen is older than current;
+                        filler: a line said while the reply is not ready
   POST /flush {gen}     stop speaking, drop queued sentences older than gen
   POST /listen {on}     pause or resume the mic
   POST /config {voice,speed}  change the voice or speaking rate (HTTP 400 if unknown)

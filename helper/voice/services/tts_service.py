@@ -17,6 +17,7 @@ add a line to ENGINES. Voices for it then go in services/voices.py.
 from typing import Any, Protocol
 
 from voice.log import log
+from voice.priority import lower_new_threads
 from voice.services.registry import load
 from voice.services.voices import VoiceSpec, resolve
 
@@ -74,7 +75,8 @@ class TTSSwitcher:
         self.engines = {k: e for k, e in self.engines.items() if k == spec.engine}
         engine = self.engines.get(spec.engine)
         if engine is None:
-            engine = self.engines[spec.engine] = engine_class(spec.engine)(**self.engine_opts.get(spec.engine, {}))
+            with lower_new_threads():
+                engine = self.engines[spec.engine] = engine_class(spec.engine)(**self.engine_opts.get(spec.engine, {}))
         self.loaded = engine.load_voice(spec.ref)
         self.engine, self.voice = engine, spec
 

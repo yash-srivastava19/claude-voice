@@ -12,11 +12,12 @@ import numpy as np
 import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).parent))
-from stt_eval import norm  # same normalisation as the accuracy benchmark
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from report import norm  # same normalisation as the accuracy benchmark
 from turn_detect import RATE, FRAME, VAD, speech_probs
 
 BENCH = Path(os.environ.get("BENCH", Path.home() / ".cache/claude-voice-bench"))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "helper"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "helper"))
 from voice.services.parakeet.stt import ParakeetSTT  # the plugin's own adapter
 
 

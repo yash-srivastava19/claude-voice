@@ -1,3 +1,2 @@
-clips/
-real/
-results*.json
+results/
+__pycache__/

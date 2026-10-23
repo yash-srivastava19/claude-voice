@@ -44,6 +44,8 @@ KOKORO_SPEED = float(os.environ.get("VOICE_KOKORO_SPEED", "1.05"))
 USER_VOICES = HOME / "voices"
 # Long sentences are spoken in clause-sized chunks, so the first sound starts sooner.
 CHUNK_WORDS = 12
+# Priority (nice) of text to speech's threads, so your words are transcribed first; 0 is off.
+TTS_NICE = int(os.environ.get("VOICE_TTS_NICE", "10"))
 
 # Audio devices. A PipeWire source name to record from instead of the default mic, such as
 # the laptop mic while Bluetooth headphones stay in their high-quality (A2DP) profile.

@@ -49,8 +49,8 @@ class VoiceTask:
         return {"speaking": self.speech_out.speaking, "listening": self.listening, "gen": self.speech_out.gen,
                 "awake": self.awake, "echo": self.echo}
 
-    def say(self, text, gen):
-        self.speech_out.say(text, gen)
+    def say(self, text, gen, filler=False):
+        self.speech_out.say(text, gen, filler)
 
     def flush(self, gen=None, why="mod"):
         self.speech_out.flush(self.speech_out.gen + 1 if gen is None else gen, why)

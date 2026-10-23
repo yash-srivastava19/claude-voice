@@ -150,3 +150,11 @@ def test_mic_reconnects(daemon):
     assert [e.get("ok") for e in evs if e["kind"] == "mic"][:2] == [False, True]
     daemon.speak_into_mic("question")
     daemon.wait_for(lambda e: "utterance" in kinds(e))
+
+
+def test_filler_plays_without_counting_as_the_reply(daemon):
+    daemon.call("POST", "/say", {"text": "Okay, let me think.", "gen": 0, "filler": True})
+    daemon.wait_for(lambda e: "idle" in kinds(e))
+    log = daemon.log.read_text()
+    assert "(filler): 'Okay, let me think.'" in log  # one piece, tagged
+    assert "first audio for gen" not in log

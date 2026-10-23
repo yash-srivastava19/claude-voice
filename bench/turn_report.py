@@ -47,13 +47,14 @@ def turns(events):
             text_at = t
         elif msg.startswith("mod: submit:"):
             cur = {"end": speech_end or t, "text_at": text_at or t, "said": msg.split(":", 2)[2].strip()[:50],
-                   "plays": [], "tools": [], "reply": None}
+                   "plays": [], "tools": [], "reply": None, "fillers": 0}
         elif cur is None:
             continue
         elif msg.startswith("play "):
             m = re.match(r"play ([\d.]+)s from \+([\d.]+)s", msg)
             start = t + float(m[2])
             cur["plays"].append((start, start + float(m[1])))
+            cur["fillers"] += "(filler)" in msg
         elif msg.startswith("first audio for gen") and cur["reply"] is None:
             cur["reply"] = t
         elif msg.startswith("mod: tool start"):
@@ -87,6 +88,7 @@ def measure(turn):
         "dead_air": sum(g1 - g0 for g0, g1 in gaps),
         "gaps": len(gaps),
         "in_tools": in_tools,
+        "fillers": turn["fillers"],
     }
 
 
@@ -101,13 +103,14 @@ def main():
         print("no spoken turns with millisecond timestamps yet")
         return
     fmt = lambda x: f"{x:6.2f}s" if x is not None else "     -"
-    print(f"{'you said':52} {'to text':>7} {'1st snd':>7} {'1st rep':>7} {'dead air':>9} {'gaps (tools)':>12}")
+    print(f"{'you said':52} {'to text':>7} {'1st snd':>7} {'1st rep':>7} {'dead air':>9} {'gaps (tools)':>12} {'fillers':>7}")
     for r in rows:
         print(f"{r['said']:52} {fmt(r['to_text'])} {fmt(r['first_sound'])} {fmt(r['first_reply'])} "
-              f"{r['dead_air']:8.1f}s {r['gaps']:5} ({r['in_tools']})")
+              f"{r['dead_air']:8.1f}s {r['gaps']:5} ({r['in_tools']}) {r['fillers']:>9}")
     med = lambda k: statistics.median(r[k] for r in rows if r[k] is not None)
     print(f"\n{len(rows)} turns. Median: to text {med('to_text'):.2f}s, first sound {med('first_sound'):.2f}s, "
-          f"first reply {med('first_reply'):.2f}s, dead air per turn {med('dead_air'):.1f}s")
+          f"first reply {med('first_reply'):.2f}s, dead air per turn {med('dead_air'):.1f}s, "
+          f"fillers {sum(r['fillers'] for r in rows)}")
 
 
 if __name__ == "__main__":

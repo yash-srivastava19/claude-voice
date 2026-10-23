@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { VoicePhase } from '../types'
+import { decide, type Said } from './fillers'
 import { SpeechSplitter } from './speech'
 
 const isActive = atom({ plugin: 'voice', key: 'isActive' } as const, false)
@@ -36,7 +37,8 @@ const HELP = `/talk start, /talk stop     turn voice mode on or off
 /talk voice <name>          switch voice: a name from the list, a mix such as
                             af_heart:0.6+bf_emma:0.4, or one of your own
 /talk speed <0.5 to 2.0>    speaking rate (1 is normal)
-/talk settings              show the current voice and speed`
+/talk fillers on|off        short lines while I work ("let me think", "running the tests")
+/talk settings              show the current voice, speed and fillers`
 
 const VOICE_CONTEXT = `Voice mode is on. The person is talking to you out loud through speech recognition, and every prose sentence you write is read aloud to them by a text-to-speech voice. Fenced code blocks, tables and headings are shown on screen and are not read. Talk the way a good pair programmer does: you are both looking at the same screen.
 
@@ -92,11 +94,18 @@ const v = {
   // Mid-turn speech the engine refused to append; it goes in when the turn ends.
   held: [] as string[],
   hasSpokenThisTurn: false,
+  // What the fillers need (fillers.ts): when the turn began, when anything was last
+  // spoken, the tool running now, and which fillers this turn has had.
+  turnStartedAt: undefined as number | undefined,
+  lastSpokeAt: 0,
+  now: 0, // the clock at the last poll
+  tool: undefined as { startedAt: number; description: string } | undefined,
+  said: { thinking: false, toolLines: 0, stillWorking: 0 } as Said,
   // The daemon sleeps after a quiet spell; a running turn keeps it awake.
   lastKeepAwake: 0,
   // The plugin's settings (userConfig), from `register`'s options; /talk voice and
   // /talk speed change them through /config, which reloads the module with the new ones.
-  settings: { voice: 'michael', speed: 1.05 },
+  settings: { voice: 'michael', speed: 1.05, fillers: true },
 }
 
 async function call($: EngineInterface, method: 'GET' | 'POST', path: string, body?: object) {
@@ -172,12 +181,31 @@ function syncGen(daemonGen: unknown) {
 }
 
 function say($: EngineInterface, text: string) {
+  v.lastSpokeAt = v.now
   if (!v.hasSpokenThisTurn) {
     v.hasSpokenThisTurn = true
     modLog($, `first sentence of turn sent (gen ${v.gen})`)
   }
   const tagged = v.gen
   v.sayChain = v.sayChain.then(() => call($, 'POST', '/say', { text, gen: tagged })).catch(() => {})
+}
+
+// A filler ("let me think", "running the tests") when a turn goes quiet; see fillers.ts.
+async function fill($: EngineInterface) {
+  if (!v.settings.fillers) return
+  const now = await read($, phase)
+  const line = decide({
+    now: v.now,
+    turnStartedAt: v.turnStartedAt,
+    lastSpokeAt: v.lastSpokeAt,
+    repliedThisTurn: v.hasSpokenThisTurn,
+    tool: v.tool,
+    canSpeak: !v.isHushedTurn && !v.muteUntilNextStep && v.openSegments === 0 && (now === 'thinking' || now === 'speaking'),
+  }, v.said)
+  if (!line) return
+  v.lastSpokeAt = v.now
+  const tagged = v.gen
+  v.sayChain = v.sayChain.then(() => call($, 'POST', '/say', { text: line, gen: tagged, filler: true })).catch(() => {})
 }
 
 // Stops speech now. Not chained behind queued sentences: the generation tag
@@ -266,6 +294,7 @@ async function poll($: EngineInterface) {
   if (v.isPolling) return
   v.isPolling = true
   try {
+    v.now = await $.clock.now()
     if ((await read($, phase)) === 'thinking') await update($, tick, n => n + 1)
     const { events, gen } = await call($, 'GET', '/events')
     v.failures = 0
@@ -308,6 +337,7 @@ async function poll($: EngineInterface) {
         await update($, phase, () => (!ok ? 'nomic' : v.runningTurn ? 'thinking' : 'listening'))
       }
     }
+    await fill($)
   } catch {
     v.failures += 1
     if (v.failures === 8) {
@@ -347,7 +377,7 @@ async function stop($: EngineInterface) {
 }
 
 // Saves one of the plugin's settings the way the /config menu would.
-async function saveSetting($: EngineInterface, field: 'voice' | 'speed', value: string | number) {
+async function saveSetting($: EngineInterface, field: 'voice' | 'speed' | 'fillers', value: string | number | boolean) {
   const row = (await $.config.list()).find(r => /^voice(@[^.]*)?\./.test(r.key) && r.key.endsWith(`.${field}`))
   if (!row) return 'saved for this session only (no /config row found)'
   const { deny } = await $.config.set({ key: row.key, value })
@@ -404,6 +434,14 @@ async function setVoice($: EngineInterface, name: string) {
   return `Voice: ${name}${note ? ` (${note})` : ''}.`
 }
 
+async function setFillers($: EngineInterface, arg: string) {
+  const want = arg.toLowerCase()
+  if (want !== 'on' && want !== 'off') return `Fillers are ${v.settings.fillers ? 'on' : 'off'}. /talk fillers on or /talk fillers off.`
+  v.settings = { ...v.settings, fillers: want === 'on' }
+  const note = await saveSetting($, 'fillers', v.settings.fillers)
+  return `Fillers ${want}: ${want === 'on' ? 'I say a short line when a turn goes quiet' : 'silence while I work'}${note ? ` (${note})` : ''}.`
+}
+
 async function setSpeed($: EngineInterface, arg: string) {
   const speed = Number(arg)
   if (!arg || !Number.isFinite(speed) || speed < 0.5 || speed > 2) return 'Speed is a number from 0.5 to 2.0, such as /talk speed 1.1.'
@@ -419,6 +457,7 @@ async function setSpeed($: EngineInterface, arg: string) {
 export const register: Register = (on, options) => {
   if (typeof options.voice === 'string' && options.voice.trim()) v.settings.voice = options.voice.trim()
   if (typeof options.speed === 'number') v.settings.speed = options.speed
+  if (typeof options.fillers === 'boolean') v.settings.fillers = options.fillers
 
   on('session.start', async ($, e, next) => {
     // Resume first: a reload must never leave voice on with nothing polling.
@@ -434,7 +473,7 @@ export const register: Register = (on, options) => {
       .register({
         name: COMMAND,
         description: 'Talk to Claude hands-free: /talk start, /talk stop, /talk voices',
-        argumentHint: '[start|stop|voices|voice <name>|speed <n>|settings]',
+        argumentHint: '[start|stop|voices|voice <name>|speed <n>|fillers on|off|settings]',
         immediate: true,
       })
       .catch(err => $.ui.toast(`voice: could not register /${COMMAND}: ${(err as Error).message}`))
@@ -458,7 +497,8 @@ export const register: Register = (on, options) => {
         hushTurn($, 'hush command')
         return { text: 'Hushed.' }
       }
-      if (arg === 'settings') return { text: `Voice: ${v.settings.voice}\nSpeed: ${v.settings.speed}\nYour voices folder: ${VOICES_DIR}` }
+      if (arg === 'fillers') return { text: await setFillers($, value) }
+      if (arg === 'settings') return { text: `Voice: ${v.settings.voice}\nSpeed: ${v.settings.speed}\nFillers: ${v.settings.fillers ? 'on' : 'off'}\nYour voices folder: ${VOICES_DIR}` }
     } catch (err) {
       return { text: `voice: ${(err as Error).message}` }
     }
@@ -497,6 +537,8 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (!v.runningTurn) v.runningTurn = e.turnId // turn.start carries no agentId; keep the main turn
     v.hasSpokenThisTurn = false
+    v.turnStartedAt = v.lastSpokeAt = await $.clock.now()
+    v.said = { thinking: false, toolLines: 0, stillWorking: 0 }
     if (await read($, isActive)) {
       modLog($, `turn start ${e.turnId}`)
       await update($, phase, () => 'thinking')
@@ -528,9 +570,11 @@ export const register: Register = (on, options) => {
     const what = 'description' in e && typeof e.description === 'string' ? `: ${e.description}` : ''
     modLog($, `tool start ${e.tool}${what}`)
     const started = await $.clock.now()
+    v.tool = { startedAt: started, description: what.slice(2) || e.tool }
     try {
       return await next(e)
     } finally {
+      v.tool = undefined
       modLog($, `tool end ${e.tool} (${((await $.clock.now()) - started) / 1000}s)`)
     }
   })
@@ -539,6 +583,8 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (e.agentId) return result
     v.runningTurn = undefined
+    v.turnStartedAt = undefined
+    v.tool = undefined
     v.muteUntilNextStep = false
     v.isHushedTurn = false
     // Mid-turn speech no step read, or the engine refused, goes in as a prompt.

@@ -13,7 +13,8 @@ import time
 
 from voice.frames import seconds
 from voice.log import log
-from voice.processors.filters import chunk_sentence
+from voice.priority import lower_this_thread
+from voice.processors.filters import split_opener
 from voice.processors.speakable import speakable
 
 
@@ -23,8 +24,8 @@ class SpeechOut:
         touch() marks activity, so the session doesn't fall asleep mid-reply."""
         self.tts, self.player, self.emit, self.touch, self.stopping = tts, player, emit, touch, stopping
         self.gen = 0
-        self.say_q = queue.Queue()  # (gen, text) waiting to be synthesized
-        self.audio_q = queue.Queue()  # (gen, text, rate, pcm) waiting to be played
+        self.say_q = queue.Queue()  # (gen, text, filler) waiting to be synthesized
+        self.audio_q = queue.Queue()  # (gen, text, filler, rate, pcm) waiting to be played
         self.pending = 0  # sentences taken off say_q and not yet played or dropped
         self.pending_lock = threading.Lock()
         self.chunked_gen = -1  # only a reply's first sentence is split, so it starts sooner
@@ -37,20 +38,23 @@ class SpeechOut:
 
     # what the rest of the daemon calls -----------------------------------
 
-    def say(self, text, gen):
+    def say(self, text, gen, filler=False):
+        """filler: a line said while the reply is not ready ("let me think"); it is never
+        split and doesn't count as the reply's first sound."""
         if gen < self.gen:
             log(f"say dropped: gen {gen} < {self.gen}")
             return
         self.touch()
         text = speakable(text)  # "0.8 s" -> "0 point eight seconds", before anything is voiced
-        # Clause-sized pieces each get their own intonation, which sounds choppy; only the
-        # first sentence of a reply is split, so the first sound comes sooner.
-        chunks = chunk_sentence(text) if gen != self.chunked_gen else [text]
-        self.chunked_gen = gen
+        # Each piece gets its own intonation, which sounds choppy. Only a reply's first
+        # sentence is split, to make the first sound come sooner.
+        chunks = [text] if filler or gen == self.chunked_gen else split_opener(text)
+        if not filler:
+            self.chunked_gen = gen
         for chunk in chunks:
             with self.pending_lock:
                 self.pending += 1
-            self.say_q.put((gen, chunk))
+            self.say_q.put((gen, chunk, filler))
 
     def flush(self, gen, why):
         self.gen = max(self.gen, gen)
@@ -91,9 +95,10 @@ class SpeechOut:
     # threads -------------------------------------------------------------
 
     def synth_loop(self):
+        lower_this_thread()
         while not self.stopping.is_set():
             try:
-                gen, text = self.say_q.get(timeout=0.2)
+                gen, text, filler = self.say_q.get(timeout=0.2)
             except queue.Empty:
                 continue
             if gen < self.gen:
@@ -103,12 +108,12 @@ class SpeechOut:
             if not pcm or gen < self.gen:
                 self._done_one()
                 continue
-            self.audio_q.put((gen, text, rate, pcm))
+            self.audio_q.put((gen, text, filler, rate, pcm))
 
     def play_loop(self):
         while not self.stopping.is_set():
             try:
-                gen, text, rate, pcm = self.audio_q.get(timeout=0.2)
+                gen, text, filler, rate, pcm = self.audio_q.get(timeout=0.2)
             except queue.Empty:
                 self._maybe_idle()
                 continue
@@ -116,10 +121,10 @@ class SpeechOut:
                 if not self.speaking:
                     self.speaking = True
                     self.emit("speaking")
-                if gen != self.last_played_gen:
+                if gen != self.last_played_gen and not filler:
                     self.last_played_gen = gen
                     log(f"first audio for gen {gen}")
-                self._play(gen, text, rate, pcm)
+                self._play(gen, text, rate, pcm, filler)
             self._done_one()
 
     # helpers -------------------------------------------------------------
@@ -135,12 +140,12 @@ class SpeechOut:
             log("tts error:", repr(err))
             return 0, b""
 
-    def _play(self, gen, text, rate, pcm):
+    def _play(self, gen, text, rate, pcm, filler=False):
         now = time.monotonic()
         start = max(now, self.player.until)
         entry = [start, start + seconds(pcm, rate), text]
         self.played = [e for e in self.played if now - e[1] < 30] + [entry]
-        log(f"play {seconds(pcm, rate):.2f}s from +{start - now:.2f}s: {text[:60]!r}")
+        log(f"play {seconds(pcm, rate):.2f}s from +{start - now:.2f}s{' (filler)' if filler else ''}: {text[:60]!r}")
         done = self.player.write(pcm, rate, lambda: gen < self.gen or self.stopping.is_set())
         if not done:
             entry[1] = time.monotonic()

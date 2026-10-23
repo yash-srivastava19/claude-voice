@@ -60,6 +60,18 @@ def test_clean_transcript(text, expected):
     assert f.clean_transcript(text) == expected
 
 
+@pytest.mark.parametrize("text,chunks", [
+    ("Sure, the basics are simple.", ["Sure,", "the basics are simple."]),
+    ("Found it, your website is a Jekyll site.", ["Found it,", "your website is a Jekyll site."]),
+    ("Yes, done.", ["Yes, done."]),  # too little after the comma to be worth a second piece
+    ("Okay opening the voice log.", ["Okay opening the voice log."]),
+    ("When the mic drops and comes back a few seconds later, it reconnects.",
+     ["When the mic drops and comes back a few seconds later, it reconnects."]),  # opener too long
+])
+def test_split_opener(text, chunks):
+    assert f.split_opener(text) == chunks
+
+
 def test_chunk_sentence_keeps_short_and_splits_long():
     assert f.chunk_sentence("Short one.") == ["Short one."]
     long = ("The first check is easy, if I am talking the mic is paused, then it waits half a second "

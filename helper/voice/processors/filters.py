@@ -115,6 +115,16 @@ def chunk_sentence(text: str) -> list[str]:
     return chunks
 
 
+def split_opener(text: str) -> list[str]:
+    """A reply's first sentence, cut so the first sound comes sooner: its opening clause
+    ("Sure," "Found it,") on its own when that is short, else clause-sized chunks.
+    The opener costs Kokoro 0.3 s against 1.1 s for the whole sentence (bench/first_audio.py)."""
+    head, sep, rest = text.partition(", ")
+    if sep and len(head.split()) <= 6 and len(rest.split()) >= 3:
+        return [head + ",", rest]
+    return chunk_sentence(text)
+
+
 def clean_transcript(text: str) -> str:
     """Strip whisper's non-speech tags and drop known hallucinations."""
     text = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", " ", text)

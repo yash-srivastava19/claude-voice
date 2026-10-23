@@ -14,7 +14,7 @@ import numpy as np
 import soundfile as sf
 
 BENCH = Path(os.environ.get("BENCH", Path.home() / ".cache/claude-voice-bench"))
-sys.path.insert(0, str(BENCH / "ref"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _whisper_features import compute_whisper_log_mel_features  # vendored from Pipecat
 
 MODEL = BENCH / "models/smart-turn-v3.2-cpu.onnx"
